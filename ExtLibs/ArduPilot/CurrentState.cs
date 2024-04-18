@@ -186,6 +186,9 @@ namespace MissionPlanner
         /// </summary>
         private double Wn_fgo;
 
+        //It is true when we got a VFR_HUD message, so it can be used to get climbrate, instead of calculating it from time and alt change.
+        private bool gotVFR = false;
+
         static CurrentState()
         {
             // set default telemrates
@@ -313,7 +316,11 @@ namespace MissionPlanner
 
                 if ((datetime - lastalt).TotalSeconds >= 0.2 && oldalt != alt || lastalt > datetime)
                 {
-                    climbrate = (alt - oldalt) / (float)(datetime - lastalt).TotalSeconds;
+                    //Don't update climbrate if we got a VFR_HUD message, because it is more accurate
+                    if (!gotVFR)
+                    {
+                        climbrate = (alt - oldalt) / (float)(datetime - lastalt).TotalSeconds;
+                    }
                     verticalspeed = (alt - oldalt) / (float)(datetime - lastalt).TotalSeconds;
                     if (float.IsInfinity(_verticalspeed))
                         _verticalspeed = 0;
@@ -1047,7 +1054,7 @@ namespace MissionPlanner
             get
             {
                 if (_groundspeed <= 1) return 0;
-                return (float)(groundspeed * groundspeed / (9.80665 * Math.Tan(roll * MathHelper.deg2rad)));
+                return (float)toDistDisplayUnit(_groundspeed * _groundspeed / (9.80665 * Math.Tan(roll * MathHelper.deg2rad)));
             }
         }
         [GroupText("Position")]
@@ -1653,10 +1660,17 @@ namespace MissionPlanner
         [DisplayText("Sonar Voltage (Volt)")][GroupText("Sensor")] public float sonarvoltage { get; set; }
 
         [DisplayText("RangeFinder1 (cm)")][GroupText("Sensor")] public uint rangefinder1 { get; set; }
-
         [DisplayText("RangeFinder2 (cm)")][GroupText("Sensor")] public uint rangefinder2 { get; set; }
-
         [DisplayText("RangeFinder3 (cm)")][GroupText("Sensor")] public uint rangefinder3 { get; set; }
+        [DisplayText("RangeFinder4 (cm)")][GroupText("Sensor")] public uint rangefinder4 { get; set; }
+        [DisplayText("RangeFinder5 (cm)")][GroupText("Sensor")] public uint rangefinder5 { get; set; }
+        [DisplayText("RangeFinder6 (cm)")][GroupText("Sensor")] public uint rangefinder6 { get; set; }
+        [DisplayText("RangeFinder7 (cm)")][GroupText("Sensor")] public uint rangefinder7 { get; set; }
+        [DisplayText("RangeFinder8 (cm)")][GroupText("Sensor")] public uint rangefinder8 { get; set; }
+        [DisplayText("RangeFinder9 (cm)")][GroupText("Sensor")] public uint rangefinder9 { get; set; }
+        [DisplayText("RangeFinder10 (cm)")][GroupText("Sensor")] public uint rangefinder10 { get; set; }
+
+
         [GroupText("Software")]
         public float freemem { get; set; }
         [GroupText("Software")] public float load { get; set; }
@@ -2021,7 +2035,11 @@ namespace MissionPlanner
         {
             if (mavLinkMessage.sysid == parent.sysid && mavLinkMessage.compid == parent.compid
                 || mavLinkMessage.msgid == (uint)MAVLink.MAVLINK_MSG_ID.RADIO // propagate the RADIO/RADIO_STATUS message across all devices on this link
-                || mavLinkMessage.msgid == (uint)MAVLink.MAVLINK_MSG_ID.RADIO_STATUS)
+                || mavLinkMessage.msgid == (uint)MAVLink.MAVLINK_MSG_ID.RADIO_STATUS
+                || ( mavLinkMessage.sysid == parent.sysid                      // Propagate NAMED_VALUE_FLOAT messages across all components within the same device
+                     && mavLinkMessage.msgid == (uint)MAVLink.MAVLINK_MSG_ID.NAMED_VALUE_FLOAT 
+                     && Settings.Instance.GetBoolean("propagateNamedFloats", true)) )
+                     
             {
                 switch (mavLinkMessage.msgid)
                 {
@@ -2476,11 +2494,16 @@ namespace MissionPlanner
 
                         {
                             var sonar = mavLinkMessage.ToStructure<MAVLink.mavlink_distance_sensor_t>();
-                            if (sonar.id == 0)
-                                rangefinder1 = sonar.current_distance;
-                            else if (sonar.id == 1)
-                                rangefinder2 = sonar.current_distance;
+                            if (sonar.id == 0) rangefinder1 = sonar.current_distance;
+                            else if (sonar.id == 1) rangefinder2 = sonar.current_distance;
                             else if (sonar.id == 2) rangefinder3 = sonar.current_distance;
+                            else if (sonar.id == 3) rangefinder4 = sonar.current_distance;
+                            else if (sonar.id == 4) rangefinder5 = sonar.current_distance;
+                            else if (sonar.id == 5) rangefinder6 = sonar.current_distance;
+                            else if (sonar.id == 6) rangefinder7 = sonar.current_distance;
+                            else if (sonar.id == 7) rangefinder8 = sonar.current_distance;
+                            else if (sonar.id == 8) rangefinder9 = sonar.current_distance;
+                            else if (sonar.id == 9) rangefinder10 = sonar.current_distance;
                         }
 
                         break;
@@ -3482,25 +3505,16 @@ namespace MissionPlanner
                             var vfr = mavLinkMessage.ToStructure<MAVLink.mavlink_vfr_hud_t>();
 
                             groundspeed = vfr.groundspeed;
-
                             airspeed = vfr.airspeed;
-
-                            //alt = vfr.alt; // this might include baro
-
                             ch3percent = vfr.throttle;
 
                             if (sensors_present.revthrottle && sensors_enabled.revthrottle && sensors_health.revthrottle)
                                 if (ch3percent > 0)
                                     ch3percent *= -1;
 
-                            //Console.WriteLine(alt);
-
-                            //climbrate = vfr.climb;
-
-                            // heading = vfr.heading;
-
-
-                            //MAVLink.packets[(byte)MAVLink.MSG_NAMES.VFR_HUD);
+                            //This comes from the EKF, so it supposed to be correct
+                            climbrate = vfr.climb;
+                            gotVFR = true; // we have a vfr packet
                         }
 
                         break;
@@ -3628,6 +3642,16 @@ namespace MissionPlanner
 
                             }
 
+                        }
+                        break;
+                    case (uint)MAVLink.MAVLINK_MSG_ID.GIMBAL_DEVICE_ATTITUDE_STATUS:
+                        {
+                            var status = mavLinkMessage.ToStructure<MAVLink.mavlink_gimbal_device_attitude_status_t>();
+                            Quaternion q = new Quaternion(status.q[0], status.q[1], status.q[2], status.q[3]);
+                            campointa = (float)(q.get_euler_pitch() * (180.0 / Math.PI));
+                            campointb = (float)(q.get_euler_roll() * (180.0 / Math.PI)); 
+                            campointc = (float)(q.get_euler_yaw() * (180.0 / Math.PI));
+                            if (campointc < 0) campointc += 360; //normalization
                         }
                         break;
                     case (uint)MAVLink.MAVLINK_MSG_ID.UAVIONIX_ADSB_OUT_STATUS:
