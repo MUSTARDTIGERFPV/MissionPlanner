@@ -5913,18 +5913,19 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
             req.target_system = (byte)(sysid);
 
             // listen before asking, a fast reply can arrive before the last request is written.
-            // completed from OnPacketReceived (not a packet subscription) as that runs after
-            // CurrentState has applied the version and capabilities our callers read next.
             var responce = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            EventHandler<MAVLinkMessage> handler = (sender, buffer) =>
-            {
-                if (buffer.msgid == (byte)MAVLINK_MSG_ID.AUTOPILOT_VERSION && buffer.sysid == sysid &&
-                    buffer.compid == req.target_component)
-                    responce.TrySetResult(true);
-            };
-
+            var sub = 0;
             if (responcerequired)
-                _OnPacketReceived += handler;
+                sub = SubscribeToPacketType(MAVLINK_MSG_ID.AUTOPILOT_VERSION, buffer =>
+                {
+                    // subscriptions run before CurrentState sees the packet, and callers read the
+                    // capabilities (FTP, MISSION_INT, PARAM_FLOAT) as soon as this returns, so apply
+                    // them here; CurrentState sets the same value, and the rest, right after
+                    var version = buffer.ToStructure<mavlink_autopilot_version_t>();
+                    MAVlist[buffer.sysid, buffer.compid].cs.capabilities = (uint) version.capabilities;
+                    responce.TrySetResult(true);
+                    return true;
+                }, sysid, compid);
 
             try
             {
@@ -5960,7 +5961,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
             finally
             {
                 if (responcerequired)
-                    _OnPacketReceived -= handler;
+                    UnSubscribeToPacketType(sub);
             }
         }
 
