@@ -315,6 +315,12 @@ namespace MissionPlanner.Controls
 
             ResetTextures(glCurrent);
 
+            if (disposing && invalidateLaterTimer != null)
+            {
+                invalidateLaterTimer.Dispose();
+                invalidateLaterTimer = null;
+            }
+
             if (objGraphics != null)
                 objGraphics.Dispose();
             objGraphics = null;
@@ -1305,10 +1311,14 @@ namespace MissionPlanner.Controls
             if (!started)
                 return;
 
-            if ((DateTime.Now - starttime).TotalMilliseconds < 30 && (_bgimage == null))
+            var sincelastframe = (DateTime.Now - starttime).TotalMilliseconds;
+            if (sincelastframe < 30 && (_bgimage == null))
             {
                 //Console.WriteLine("ms "+(DateTime.Now - starttime).TotalMilliseconds);
                 //e.Graphics.DrawImageUnscaled(objBitmap, 0, 0);
+                // this paint is dropped and its region validated, so draw again once the 30 ms are up rather than
+                // leave the values it was for on screen until the next invalidate
+                InvalidateLater(Math.Min(30, 30 - (int) sincelastframe));
                 return;
             }
 
@@ -1420,6 +1430,34 @@ namespace MissionPlanner.Controls
             {
                 inOnPaint = false;
             }
+        }
+
+        private System.Windows.Forms.Timer invalidateLaterTimer;
+
+        /// <summary>
+        /// Invalidates the HUD once after ms, unless one is already pending.
+        /// </summary>
+        private void InvalidateLater(int ms)
+        {
+            // the timer ticks on the thread that created it, which needs to be the UI thread
+            if (InvokeRequired || IsDisposed)
+                return;
+
+            if (invalidateLaterTimer == null)
+            {
+                invalidateLaterTimer = new System.Windows.Forms.Timer();
+                invalidateLaterTimer.Tick += (sender, args) =>
+                {
+                    invalidateLaterTimer.Stop();
+                    Invalidate();
+                };
+            }
+
+            if (invalidateLaterTimer.Enabled)
+                return;
+
+            invalidateLaterTimer.Interval = Math.Max(1, ms);
+            invalidateLaterTimer.Start();
         }
 
         void Clear(Color color)
