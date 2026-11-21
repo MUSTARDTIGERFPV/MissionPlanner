@@ -365,9 +365,31 @@ namespace MissionPlanner.Comms
         private static Task nameLookup = Task.CompletedTask;
         private static bool nameLookupRunning;
 
-        // ports that came back without a name are asked about again, but no more often than this
+        // the ports the running lookup is asking about, so a repaint does not queue them a second time
+        private static string[] namePortsInFlight = Array.Empty<string>();
+
+        // a port that came back without a name is asked about again, backing off per port from
+        // EmptyNameRetryInterval, doubling, up to EmptyNameRetryMax
         private static readonly TimeSpan EmptyNameRetryInterval = TimeSpan.FromSeconds(10);
-        private static DateTime lastEmptyNameRetry = DateTime.MinValue;
+        private static readonly TimeSpan EmptyNameRetryMax = TimeSpan.FromMinutes(5);
+        private static readonly Dictionary<string, int> emptyNameFailures = new Dictionary<string, int>();
+        private static readonly Dictionary<string, DateTime> emptyNameRetryAt = new Dictionary<string, DateTime>();
+
+        private static readonly bool IsWindows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+
+        private static readonly System.Text.RegularExpressions.Regex ComPortName =
+            new System.Text.RegularExpressions.Regex(@"^COM\d+$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// On Windows only COMn ports have a name to look up; WINUSB_* devices, BLE labels, com0com
+        /// pairs and the like never get one, so they are not asked about at all.
+        /// </summary>
+        private static bool CanHaveNiceName(string port)
+        {
+            return !IsWindows || ComPortName.IsMatch(port);
+        }
 
         private static bool IsNetworkPort(string port)
         {
@@ -410,35 +432,68 @@ namespace MissionPlanner.Comms
         {
             lock (namelocker)
             {
-                var retryEmpty = DateTime.UtcNow - lastEmptyNameRetry > EmptyNameRetryInterval;
-                var retriedEmpty = false;
+                var now = DateTime.UtcNow;
 
                 foreach (var port in ports ?? Enumerable.Empty<string>())
                 {
                     if (string.IsNullOrWhiteSpace(port) || IsNetworkPort(port))
                         continue;
 
+                    if (!CanHaveNiceName(port))
+                    {
+                        // cached without a name, so painting it does not keep asking
+                        comportnamecache[port] = "";
+                        continue;
+                    }
+
                     if (comportnamecache.TryGetValue(port, out var cached))
                     {
-                        if (cached != "" || !retryEmpty)
+                        if (cached != "")
                             continue;
-                        retriedEmpty = true;
+                        if (emptyNameRetryAt.TryGetValue(port, out var retryAt) && now < retryAt)
+                            continue;
+                        if (Array.IndexOf(namePortsInFlight, port) >= 0)
+                            continue;
                     }
 
                     pendingNamePorts.Add(port);
                 }
 
-                if (retriedEmpty)
-                    lastEmptyNameRetry = DateTime.UtcNow;
+                return StartNameLookup();
+            }
+        }
 
-                if (pendingNamePorts.Count > 0 && !nameLookupRunning)
+        /// <summary>
+        /// Look up every port again, e.g. after a device arrived or was removed: a different device can
+        /// reuse a COM number. The cached names stay readable until the lookup replaces them.
+        /// </summary>
+        public static void InvalidateNiceNames()
+        {
+            lock (namelocker)
+            {
+                emptyNameFailures.Clear();
+                emptyNameRetryAt.Clear();
+
+                foreach (var port in comportnamecache.Keys)
                 {
-                    nameLookupRunning = true;
-                    nameLookup = Task.Run(LookupPendingNames);
+                    if (CanHaveNiceName(port))
+                        pendingNamePorts.Add(port);
                 }
 
-                return nameLookup;
+                StartNameLookup();
             }
+        }
+
+        // namelocker must be held
+        private static Task StartNameLookup()
+        {
+            if (pendingNamePorts.Count > 0 && !nameLookupRunning)
+            {
+                nameLookupRunning = true;
+                nameLookup = Task.Run(LookupPendingNames);
+            }
+
+            return nameLookup;
         }
 
         public static string GetNiceName(string port)
@@ -472,47 +527,93 @@ namespace MissionPlanner.Comms
 
         private static void LookupPendingNames()
         {
-            // let a burst of requests (e.g. every item of a dropdown being painted) join one lookup
-            Thread.Sleep(50);
-
-            while (true)
+            var finished = false;
+            try
             {
-                string[] ports;
-                lock (namelocker)
+                // let a burst of requests (e.g. every item of a dropdown being painted) join one lookup
+                Thread.Sleep(50);
+
+                while (true)
                 {
-                    if (pendingNamePorts.Count == 0)
+                    string[] ports;
+                    lock (namelocker)
                     {
+                        if (pendingNamePorts.Count == 0)
+                        {
+                            nameLookupRunning = false;
+                            finished = true;
+                            return;
+                        }
+
+                        ports = pendingNamePorts.ToArray();
+                        pendingNamePorts.Clear();
+                        namePortsInFlight = ports;
+                    }
+
+                    var names = LookupNames(ports);
+
+                    var changed = false;
+                    lock (namelocker)
+                    {
+                        namePortsInFlight = Array.Empty<string>();
+
+                        foreach (var item in names)
+                        {
+                            if (item.Value != "")
+                            {
+                                emptyNameFailures.Remove(item.Key);
+                                emptyNameRetryAt.Remove(item.Key);
+                            }
+
+                            if (comportnamecache.TryGetValue(item.Key, out var old) && old == item.Value)
+                                continue;
+                            comportnamecache[item.Key] = item.Value;
+                            changed = true;
+                        }
+
+                        // no name: wait 10 s, 20 s, 40 s ... up to EmptyNameRetryMax before asking again
+                        var now = DateTime.UtcNow;
+                        foreach (var port in ports)
+                        {
+                            if (names.TryGetValue(port, out var name) && name != "")
+                                continue;
+
+                            emptyNameFailures.TryGetValue(port, out var failures);
+                            failures++;
+                            emptyNameFailures[port] = failures;
+
+                            var delay = TimeSpan.FromTicks(EmptyNameRetryInterval.Ticks << Math.Min(failures - 1, 10));
+                            emptyNameRetryAt[port] = now + (delay > EmptyNameRetryMax ? EmptyNameRetryMax : delay);
+                        }
+                    }
+
+                    if (changed)
+                    {
+                        try
+                        {
+                            NiceNamesChanged?.Invoke(null, EventArgs.Empty);
+                        }
+                        catch (Exception ex)
+                        {
+                            log.Error(ex);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Error("Serial port name lookup failed", ex);
+            }
+            finally
+            {
+                // on an unexpected exit let the next RefreshNiceNames start a new lookup; on the normal
+                // exit the flag was already cleared under the lock, and a new lookup may be running now
+                if (!finished)
+                {
+                    lock (namelocker)
+                    {
+                        namePortsInFlight = Array.Empty<string>();
                         nameLookupRunning = false;
-                        return;
-                    }
-
-                    ports = pendingNamePorts.ToArray();
-                    pendingNamePorts.Clear();
-                }
-
-                var names = LookupNames(ports);
-
-                var changed = false;
-                lock (namelocker)
-                {
-                    foreach (var item in names)
-                    {
-                        if (comportnamecache.TryGetValue(item.Key, out var old) && old == item.Value)
-                            continue;
-                        comportnamecache[item.Key] = item.Value;
-                        changed = true;
-                    }
-                }
-
-                if (changed)
-                {
-                    try
-                    {
-                        NiceNamesChanged?.Invoke(null, EventArgs.Empty);
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Error(ex);
                     }
                 }
             }

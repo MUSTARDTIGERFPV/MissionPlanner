@@ -1298,7 +1298,11 @@ namespace MissionPlanner
         private void SerialportList_DeviceChanged(WM_DEVICECHANGE_enum cause)
         {
             if (cause == WM_DEVICECHANGE_enum.DBT_DEVICEARRIVAL || cause == WM_DEVICECHANGE_enum.DBT_DEVICEREMOVECOMPLETE)
+            {
+                // another device may now have a COM number that already has a name cached
+                SerialPort.InvalidateNiceNames();
                 RefreshSerialportListAsync();
+            }
         }
 
         private void CMB_serialport_DropDownClosed(object sender, EventArgs e)
