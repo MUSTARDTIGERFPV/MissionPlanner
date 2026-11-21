@@ -18,6 +18,21 @@ namespace MissionPlanner.Utilities
                 /*SizeLimit = 1024 * 1024 * 500*/
             });
 
+        // bumped whenever metadata is (re)loaded, so an answer from older metadata is not cached
+        private static int _generation;
+
+        /// <summary>
+        /// Drop all cached answers (including misses). Called when any metadata source is (re)loaded.
+        /// </summary>
+        internal static void ClearCache()
+        {
+            lock (_cache)
+            {
+                _generation++;
+                _cache.Compact(1.0);
+            }
+        }
+
         /// <summary>
         /// Gets the parameter meta data.
         /// </summary>
@@ -26,11 +41,14 @@ namespace MissionPlanner.Utilities
         /// <returns></returns>
         public static string GetParameterMetaData(string nodeKey, string metaKey, string vechileType)
         {
+            int generation;
             lock (_cache)
             {
+                // a miss is cached as string.Empty
                 var ans = _cache.Get(nodeKey + metaKey + vechileType) as string;
                 if (ans != null)
                     return ans;
+                generation = _generation;
             }
 
             if (vechileType == "PX4")
@@ -48,13 +66,12 @@ namespace MissionPlanner.Utilities
                 if (answer == string.Empty)
                     answer = ParameterMetaDataRepositoryAPM.GetParameterMetaData(nodeKey, metaKey, vechileType);
 
-                if (answer == string.Empty)
-                    return String.Empty;
-
                 lock (_cache)
                 {
                     try
                     {
+                        if (generation != _generation)
+                            return answer;
                         var ci = _cache.CreateEntry(nodeKey + metaKey + vechileType);
                         ci.Value = answer;
                         ci.Size = ((string)ci.Value).Length;

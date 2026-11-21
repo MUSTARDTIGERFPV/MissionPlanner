@@ -80,7 +80,10 @@ namespace MissionPlanner.Utilities
                     var veh = vehicles.First(b => b.Contains(a));
 
                     if(_parameterMetaDataXML.ContainsKey(a + version.ToString()))
+                    {
                         _parameterMetaDataXML[veh] = _parameterMetaDataXML[a + version.ToString()];
+                        ParameterMetaDataRepository.ClearCache();
+                    }
                 }
                 catch (Exception ex) { log.Error(ex); }
             });
@@ -155,6 +158,7 @@ namespace MissionPlanner.Utilities
         public static void Reset()
         {
             _parameterMetaDataXML.Clear();
+            ParameterMetaDataRepository.ClearCache();
         }
 
         public static void Reload(string vehicle = "")
@@ -167,6 +171,7 @@ namespace MissionPlanner.Utilities
                 if (File.Exists(paramMetaDataXMLFileName))
                 {
                     _parameterMetaDataXML[vehicle] = XDocument.Load(paramMetaDataXMLFileName);
+                    ParameterMetaDataRepository.ClearCache();
                 }
 
             }

@@ -59,6 +59,9 @@ namespace MissionPlanner.Utilities
             catch
             {
             }
+
+            if (_parameterMetaDataXML != null)
+                ParameterMetaDataRepository.ClearCache();
         }
 
         /// <summary>
