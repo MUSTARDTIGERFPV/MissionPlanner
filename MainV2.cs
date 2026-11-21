@@ -2102,13 +2102,20 @@ namespace MissionPlanner
                 try
                 {
                     // keep pumping: plugin.Exit() runs on the plugin thread and may invoke onto this one.
-                    // it is a background thread, so a plugin that never returns cannot hold up closing
-                    var deadline = DateTime.Now.AddSeconds(3);
+                    // Nothing below (views, comPort, SaveConfig) may start while a plugin is still saving
+                    // in Exit(), so wait for the whole Exit() loop. The wake makes this instant normally;
+                    // the limit is generous because a cold Exit() can be slow (eg an XmlSerializer compile).
+                    // it is a background thread, so a plugin that never returns cannot hold up closing for good
+                    var deadline = DateTime.Now.AddSeconds(15);
                     while (!PluginThreadrunner.WaitOne(10))
                     {
                         if (DateTime.Now > deadline)
                         {
-                            log.Warn("plugin thread did not exit");
+                            var exiting = PluginExiting;
+                            if (exiting != null)
+                                log.Warn("plugin thread did not exit, still in Exit() of plugin " + exiting);
+                            else
+                                log.Warn("plugin thread did not exit, still in its plugin loop");
                             break;
                         }
 
@@ -2535,6 +2542,11 @@ namespace MissionPlanner
         /// </summary>
         ManualResetEventSlim PluginThreadWake = new ManualResetEventSlim(false);
 
+        /// <summary>
+        /// Name of the plugin whose Exit() the plugin thread is running, for the close timeout log
+        /// </summary>
+        volatile string PluginExiting;
+
         private void PluginThread()
         {
             Hashtable nextrun = new Hashtable();
@@ -2591,6 +2603,7 @@ namespace MissionPlanner
                 var plugin = Plugin.PluginLoader.Plugins[0];
                 try
                 {
+                    PluginExiting = plugin.Name + " (" + plugin.FileName + ")";
                     plugin.Exit();
                 }
                 catch (Exception ex)
@@ -2600,6 +2613,8 @@ namespace MissionPlanner
 
                 Plugin.PluginLoader.Plugins.Remove(plugin);
             }
+
+            PluginExiting = null;
 
             try
             {
