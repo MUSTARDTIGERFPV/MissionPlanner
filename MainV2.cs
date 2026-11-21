@@ -2223,7 +2223,9 @@ namespace MissionPlanner
 
             if (joystick != null)
             {
-                while (!joysendThreadExited)
+                // it exits within one 40 ms loop; never hang closing on it
+                var deadline = DateTime.Now.AddSeconds(1);
+                while (!joysendThreadExited && DateTime.Now < deadline)
                     Thread.Sleep(10);
 
                 joystick.Dispose(); //proper clean up of joystick.
