@@ -2230,7 +2230,10 @@ namespace MissionPlanner
 
             if (joystick != null)
             {
-                // it exits within one 40 ms loop; never hang closing on it
+                // it exits within one 40 ms loop; never hang closing on it.
+                // If the limit is hit the sender may still poll while we dispose; everything it does with the
+                // joystick is inside its catch-all try, and JoystickWindows.Dispose catches its own errors,
+                // so the worst case is one swallowed exception on a thread that is about to exit
                 var deadline = DateTime.Now.AddSeconds(1);
                 while (!joysendThreadExited && DateTime.Now < deadline)
                     Thread.Sleep(10);
