@@ -320,7 +320,9 @@ namespace MissionPlanner
             MissionPlanner.Comms.CommsBase.Settings += CommsBase_Settings;
             MissionPlanner.Comms.CommsBase.InputBoxShow += CommsBaseOnInputBoxShow;
             MissionPlanner.Comms.CommsBase.ApplyTheme += MissionPlanner.Utilities.ThemeManager.ApplyThemeTo;
-            MissionPlanner.Comms.SerialPort.GetDeviceName += SerialPort_GetDeviceName;
+            // WMI is Windows only
+            if (!MONO)
+                MissionPlanner.Comms.SerialPort.GetDeviceNames += SerialPort_GetDeviceNames;
 
             MissionPlanner.Utilities.Extensions.MessageLoop = new Action(() => Application.DoEvents());
 
@@ -518,22 +520,27 @@ namespace MissionPlanner
             }
         }
 
-        private static string SerialPort_GetDeviceName(string port)
+        private static Dictionary<string, string> SerialPort_GetDeviceNames(string[] ports)
         {
-            ObjectQuery query = new ObjectQuery("SELECT * FROM Win32_SerialPort"); // Win32_USBControllerDevice
+            // one query names every port; only the two properties used are fetched
+            var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            ObjectQuery query = new ObjectQuery("SELECT DeviceID, Name FROM Win32_SerialPort");
             using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(query))
+            using (ManagementObjectCollection results = searcher.Get())
             {
-                foreach (ManagementObject obj2 in searcher.Get())
+                foreach (ManagementObject obj2 in results)
                 {
-                    //DeviceID
-                    if (obj2.Properties["DeviceID"].Value.ToString().ToUpper() == port.ToUpper())
+                    using (obj2)
                     {
-                        return obj2.Properties["Name"].Value.ToString();
+                        var deviceid = obj2["DeviceID"]?.ToString();
+                        var name = obj2["Name"]?.ToString();
+                        if (!string.IsNullOrEmpty(deviceid) && !string.IsNullOrEmpty(name))
+                            names[deviceid] = name;
                     }
                 }
             }
 
-            return "";
+            return names;
         }
 
         private static void LoadDlls()
