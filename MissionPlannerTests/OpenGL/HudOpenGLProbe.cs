@@ -51,21 +51,7 @@ namespace MissionPlannerTests.OpenGL
 
         public static Result Run(int width = 640, int height = 480, int timeoutMs = 30000)
         {
-            Result result = null;
-            Exception crash = null;
-            // WinForms + WGL/GLX want a dedicated STA UI thread regardless of the caller.
-            var thread = new Thread(() =>
-            {
-                try { result = RunOnUiThread(width, height, timeoutMs); }
-                catch (Exception ex) { crash = ex; }
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            if (!thread.Join(timeoutMs + 30000))
-                return new Result { Failure = "HUD OpenGL probe hung" };
-            if (crash != null)
-                return new Result { Failure = "HUD OpenGL probe threw: " + crash };
-            return result;
+            return OnStaThread(() => RunOnUiThread(width, height, timeoutMs), timeoutMs);
         }
 
         static Result RunOnUiThread(int width, int height, int timeoutMs)
@@ -119,6 +105,140 @@ namespace MissionPlannerTests.OpenGL
             }
 
             Validate(result);
+            return result;
+        }
+
+        /// <summary>
+        /// Shows a sequence of video background frames with the status icons on and checks each one is what
+        /// reaches the screen: a new frame of the same size, a frame of a different size, and a frame after
+        /// the HUD has thrown its textures away (as it does every hour). With forcePot the HUD takes its
+        /// OpenGL 1.x path, which resizes every image to a power-of-two bitmap before uploading it.
+        /// </summary>
+        public static Result RunVideoBackground(bool forcePot, int width = 640, int height = 480, int timeoutMs = 30000)
+        {
+            return OnStaThread(() => RunVideoBackgroundOnUiThread(forcePot, width, height, timeoutMs), timeoutMs);
+        }
+
+        static Result RunVideoBackgroundOnUiThread(bool forcePot, int width, int height, int timeoutMs)
+        {
+            var result = new Result();
+            PreloadOpenGL(result);
+
+            // size and colour of each background frame; the last one is shown after doResize()
+            var frames = new[]
+            {
+                new { W = 1280, H = 720, C = Color.FromArgb(0, 255, 0), Reset = false },
+                new { W = 1280, H = 720, C = Color.FromArgb(255, 0, 255), Reset = false },
+                new { W = 320, H = 240, C = Color.FromArgb(255, 255, 0), Reset = false },
+                new { W = 320, H = 240, C = Color.FromArgb(0, 255, 255), Reset = true },
+            };
+
+            using (var form = new Form())
+            using (var hud = new HUD())
+            {
+                form.Text = "HUD OpenGL probe";
+                form.FormBorderStyle = FormBorderStyle.FixedSingle;
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new Point(0, 0);
+                form.ClientSize = new Size(width, height);
+
+                hud.opengl = true;
+                hud.Dock = DockStyle.Fill;
+                hud.displayicons = true;
+                hud.connected = true;
+                hud.batteryremaining = 60;
+                hud.gpsfix = 3;
+
+                int framesSinceChange = 0;
+                bool want = false;
+                hud.OnCustomPaint += h =>
+                {
+                    if (!h.opengl || GraphicsContext.CurrentContext == null)
+                        return;
+                    result.GLFrames++;
+                    framesSinceChange++;
+                    if (want && framesSinceChange >= 2 && result.Frame == null)
+                        Capture(h, result);
+                };
+
+                form.Controls.Add(hud);
+                form.Show();
+                Application.DoEvents();
+
+                if (forcePot)
+                    typeof(HUD).GetProperty("npotSupported").GetSetMethod(true).Invoke(hud, new object[] { false });
+
+                var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                for (int i = 0; i < frames.Length && result.Failure == null; i++)
+                {
+                    var bg = new Bitmap(frames[i].W, frames[i].H, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                    using (var g = Graphics.FromImage(bg))
+                        g.Clear(frames[i].C);
+
+                    if (frames[i].Reset)
+                        hud.doResize();
+
+                    var old = result.Frame;
+                    result.Frame = null;
+                    if (old != null)
+                        old.Dispose();
+                    framesSinceChange = 0;
+                    want = true;
+                    hud.bgimage = bg;
+
+                    while (result.Frame == null && result.Failure == null && DateTime.UtcNow < deadline && hud.opengl)
+                    {
+                        hud.Invalidate();
+                        Application.DoEvents();
+                        Thread.Sleep(20);
+                    }
+
+                    want = false;
+                    if (result.Failure != null || result.Frame == null || !hud.opengl)
+                        break;
+
+                    // the icons and text cover part of the frame; the background must show everywhere else
+                    double match = Fraction(result.Frame, 0, result.Frame.Height, frames[i].C);
+                    if (match < 0.6)
+                        result.Failure = string.Format("Background frame {0} ({1}x{2}) not drawn: {3:P0} of the frame matches it",
+                            i, frames[i].W, frames[i].H, match);
+                }
+
+                result.OpenGLStillEnabled = hud.opengl;
+                var last = hud.bgimage;
+                hud.bgimage = null;
+                if (last != null)
+                    last.Dispose();
+                form.Close();
+            }
+
+            if (result.Failure == null)
+            {
+                if (!result.OpenGLStillEnabled)
+                    result.Failure = "HUD fell back to GDI+ (OpenGL context creation or first GL call failed; see log)";
+                else if (result.Frame == null)
+                    result.Failure = "No OpenGL frame was rendered (GL frames seen: " + result.GLFrames + ")";
+            }
+
+            return result;
+        }
+
+        static Result OnStaThread(Func<Result> body, int timeoutMs)
+        {
+            Result result = null;
+            Exception crash = null;
+            // WinForms + WGL/GLX want a dedicated STA UI thread regardless of the caller.
+            var thread = new Thread(() =>
+            {
+                try { result = body(); }
+                catch (Exception ex) { crash = ex; }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            if (!thread.Join(timeoutMs + 30000))
+                return new Result { Failure = "HUD OpenGL probe hung" };
+            if (crash != null)
+                return new Result { Failure = "HUD OpenGL probe threw: " + crash };
             return result;
         }
 

@@ -22,5 +22,23 @@ namespace MissionPlannerTests.OpenGL
             TestContext.WriteLine(result.ToString());
             Assert.IsTrue(result.Passed, result.ToString());
         }
+
+        [TestMethod]
+        [TestCategory("OpenGL")]
+        public void HudDrawsVideoBackgroundWithOpenGL()
+        {
+            var result = HudOpenGLProbe.RunVideoBackground(false);
+            TestContext.WriteLine(result.ToString());
+            Assert.IsTrue(result.Passed, result.ToString());
+        }
+
+        [TestMethod]
+        [TestCategory("OpenGL")]
+        public void HudDrawsVideoBackgroundWithPowerOfTwoTextures()
+        {
+            var result = HudOpenGLProbe.RunVideoBackground(true);
+            TestContext.WriteLine(result.ToString());
+            Assert.IsTrue(result.Passed, result.ToString());
+        }
     }
 }

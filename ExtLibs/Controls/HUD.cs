@@ -168,7 +168,10 @@ namespace MissionPlanner.Controls
             public Bitmap bitmap;
             public int gltextureid;
             public int width;
+            public int height;
             public int size;
+            // bitmap is a POT copy made by DrawImage, not the caller's image
+            public bool ownsBitmap;
         }
 
         private Dictionary<int, character> charDict = new Dictionary<int, character>();
@@ -297,22 +300,22 @@ namespace MissionPlanner.Controls
         {
             log.Info("HUD Dispose");
 
-            if (opengl)
+            // GL calls act on whichever context is current, which need not be this HUD's
+            bool glCurrent = false;
+            if (opengl && disposing && IsHandleCreated)
             {
-                foreach (character texid in _texture)
+                try
                 {
-                    if (texid != null && texid.gltextureid != 0)
-                        GL.DeleteTexture(texid.gltextureid);
+                    MakeCurrent();
+                    glCurrent = true;
                 }
-
-                this._texture = new character[_texture.Length];
-
-                foreach (character texid in charDict.Values)
+                catch (Exception ex)
                 {
-                    if (texid.gltextureid != 0)
-                        GL.DeleteTexture(texid.gltextureid);
+                    log.Error(ex);
                 }
             }
+
+            ResetTextures(glCurrent);
 
             foreach (var icon in iconCache.Values)
                 icon.Dispose();
@@ -1500,8 +1503,14 @@ namespace MissionPlanner.Controls
 
         public static Bitmap ResizeImage(Image image, int width, int height)
         {
-            var destRect = new Rectangle(0, 0, width, height);
             var destImage = new Bitmap(width, height);
+            ResizeInto(image, destImage);
+            return destImage;
+        }
+
+        private static void ResizeInto(Image image, Bitmap destImage)
+        {
+            var destRect = new Rectangle(0, 0, destImage.Width, destImage.Height);
 
             using (var graphics = Graphics.FromImage(destImage))
             {
@@ -1518,11 +1527,18 @@ namespace MissionPlanner.Controls
                     graphics.DrawImage(image, destRect, 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, wrapMode);
                 }
             }
-
-            return destImage;
         }
 
         private character[] _texture = new character[2];
+
+        // _texture slot for the video background, which is a new image every frame. Slot 0 stays the default
+        // for callers of DrawImage.
+        private const int bgTextureSlot = 1;
+
+        // GL textures of images that never change once loaded (the iconCache icons), keyed by the image, so
+        // each is uploaded once instead of on every draw
+        private readonly Dictionary<Image, character> imageTextures = new Dictionary<Image, character>();
+
         private float _batterylevel2;
         private float _batteryremaining2;
         private float _current2;
@@ -1564,53 +1580,82 @@ namespace MissionPlanner.Controls
                 if (_texture[textureno] == null)
                     _texture[textureno] = new character();
 
-                // If the image is already a bitmap and we support NPOT textures then simply use it.
-                if (npotSupported && img is Bitmap)
+                UploadTexture(_texture[textureno], img);
+                DrawTexture(_texture[textureno].gltextureid, x, y, width, height);
+            }
+            else
+            {
+                graphicsObjectGDIP.DrawImage(img, x, y, width, height);
+            }
+        }
+
+        /// <summary>
+        /// Draws an image that does not change while the HUD holds it, such as an iconCache icon. In OpenGL it
+        /// is uploaded once and its texture reused, instead of being uploaded to a shared slot on every draw.
+        /// </summary>
+        private void DrawIcon(Image img, int x, int y, int width, int height)
+        {
+            if (!opengl)
+            {
+                graphicsObjectGDIP.DrawImage(img, x, y, width, height);
+                return;
+            }
+
+            if (img == null)
+                return;
+
+            character tex;
+            if (!imageTextures.TryGetValue(img, out tex))
+            {
+                tex = new character();
+                UploadTexture(tex, img);
+                // the texture is all that is needed from here on
+                if (tex.ownsBitmap)
+                    tex.bitmap.Dispose();
+                tex.bitmap = null;
+                tex.ownsBitmap = false;
+                imageTextures[img] = tex;
+            }
+
+            DrawTexture(tex.gltextureid, x, y, width, height);
+        }
+
+        /// <summary>
+        /// Copies img into tex's GL texture, creating it on first use. The texture storage is only reallocated
+        /// when the size changes; otherwise the pixels are replaced in place.
+        /// </summary>
+        private void UploadTexture(character tex, Image img)
+        {
+            Bitmap source;
+
+            // If the image is already a bitmap and we support NPOT textures then simply use it.
+            if (npotSupported && img is Bitmap)
+            {
+                if (tex.ownsBitmap)
+                    tex.bitmap.Dispose();
+                tex.bitmap = null;
+                tex.ownsBitmap = false;
+                source = (Bitmap) img;
+            }
+            else
+            {
+                // Otherwise we have to resize img to be POT. Reuse this slot's POT bitmap across frames.
+                if (!tex.ownsBitmap)
                 {
-                    _texture[textureno].bitmap = (Bitmap) img;
-                }
-                else
-                {
-                    // Otherwise we have to resize img to be POT.
-                    _texture[textureno].bitmap = ResizeImage(img, 512, 512);
+                    tex.bitmap = new Bitmap(512, 512);
+                    tex.ownsBitmap = true;
                 }
 
-                // generate the texture
-                if (_texture[textureno].gltextureid == 0)
-                {
-                    GL.GenTextures(1, out _texture[textureno].gltextureid);
-                }
+                ResizeInto(img, tex.bitmap);
+                source = tex.bitmap;
+            }
 
-                GL.BindTexture(TextureTarget.Texture2D, _texture[textureno].gltextureid);
+            // generate the texture
+            if (tex.gltextureid == 0)
+            {
+                GL.GenTextures(1, out tex.gltextureid);
 
-                BitmapData data = _texture[textureno].bitmap.LockBits(
-                    new Rectangle(0, 0, _texture[textureno].bitmap.Width, _texture[textureno].bitmap.Height),
-                    ImageLockMode.ReadOnly,
-                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-
-                // create the texture type/dimensions
-                if (_texture[textureno].width != _texture[textureno].bitmap.Width)
-                {
-                    GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, data.Width, data.Height, 0,
-                        OpenTK.Graphics.OpenGL.PixelFormat.Bgra, PixelType.UnsignedByte, data.Scan0);
-
-                    _texture[textureno].width = data.Width;
-                }
-                else
-                {
-                    GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, data.Width, data.Height,
-                        OpenTK.Graphics.OpenGL.PixelFormat.Bgra, PixelType.UnsignedByte, data.Scan0);
-                }
-
-                _texture[textureno].bitmap.UnlockBits(data);
-
-                bool polySmoothEnabled = GL.IsEnabled(EnableCap.PolygonSmooth);
-                if (polySmoothEnabled)
-                    GL.Disable(EnableCap.PolygonSmooth);
-
-                GL.Enable(EnableCap.Texture2D);
-
-                GL.BindTexture(TextureTarget.Texture2D, _texture[textureno].gltextureid);
+                GL.BindTexture(TextureTarget.Texture2D, tex.gltextureid);
 
                 GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
                     (int) TextureMinFilter.Linear);
@@ -1620,31 +1665,66 @@ namespace MissionPlanner.Controls
                     (int) TextureWrapMode.ClampToEdge);
                 GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
                     (int) TextureWrapMode.ClampToEdge);
-
-                GL.Begin(PrimitiveType.TriangleStrip);
-
-                GL.TexCoord2(0.0f, 0.0f);
-                GL.Vertex2(x, y);
-                GL.TexCoord2(0.0f, 1.0f);
-                GL.Vertex2(x, y + height);
-                GL.TexCoord2(1.0f, 0.0f);
-                GL.Vertex2(x + width, y);
-                GL.TexCoord2(1.0f, 1.0f);
-                GL.Vertex2(x + width, y + height);
-
-                GL.End();
-
-                GL.Disable(EnableCap.Texture2D);
-
-                GL.BindTexture(TextureTarget.Texture2D, 0);
-
-                if (polySmoothEnabled)
-                    GL.Enable(EnableCap.PolygonSmooth);
             }
             else
             {
-                graphicsObjectGDIP.DrawImage(img, x, y, width, height);
+                GL.BindTexture(TextureTarget.Texture2D, tex.gltextureid);
             }
+
+            BitmapData data = source.LockBits(
+                new Rectangle(0, 0, source.Width, source.Height),
+                ImageLockMode.ReadOnly,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+            // create the texture type/dimensions
+            if (tex.width != data.Width || tex.height != data.Height)
+            {
+                GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, data.Width, data.Height, 0,
+                    OpenTK.Graphics.OpenGL.PixelFormat.Bgra, PixelType.UnsignedByte, data.Scan0);
+
+                tex.width = data.Width;
+                tex.height = data.Height;
+            }
+            else
+            {
+                GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, data.Width, data.Height,
+                    OpenTK.Graphics.OpenGL.PixelFormat.Bgra, PixelType.UnsignedByte, data.Scan0);
+            }
+
+            source.UnlockBits(data);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        private void DrawTexture(int gltextureid, int x, int y, int width, int height)
+        {
+            bool polySmoothEnabled = GL.IsEnabled(EnableCap.PolygonSmooth);
+            if (polySmoothEnabled)
+                GL.Disable(EnableCap.PolygonSmooth);
+
+            GL.Enable(EnableCap.Texture2D);
+
+            GL.BindTexture(TextureTarget.Texture2D, gltextureid);
+
+            GL.Begin(PrimitiveType.TriangleStrip);
+
+            GL.TexCoord2(0.0f, 0.0f);
+            GL.Vertex2(x, y);
+            GL.TexCoord2(0.0f, 1.0f);
+            GL.Vertex2(x, y + height);
+            GL.TexCoord2(1.0f, 0.0f);
+            GL.Vertex2(x + width, y);
+            GL.TexCoord2(1.0f, 1.0f);
+            GL.Vertex2(x + width, y + height);
+
+            GL.End();
+
+            GL.Disable(EnableCap.Texture2D);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+
+            if (polySmoothEnabled)
+                GL.Enable(EnableCap.PolygonSmooth);
         }
 
         public void DrawPath(Pen penn, GraphicsPath gp)
@@ -2048,7 +2128,7 @@ namespace MissionPlanner.Controls
                     {
                         try
                         {
-                            graphicsObject.DrawImage(_bgimage, 0, 0, this.Width, this.Height);
+                            graphicsObject.DrawImage(_bgimage, 0, 0, this.Width, this.Height, bgTextureSlot);
                         }
                         catch (Exception ex)
                         {
@@ -2947,7 +3027,7 @@ namespace MissionPlanner.Controls
                     if (displayicons)
                     {
                         var bottomsize = ((fontsize + 2) * 3) + fontoffset - 2;
-                        DrawImage(icon, 3, this.Height - bottomsize, bottomsize / 2, bottomsize);
+                        DrawIcon(icon, 3, this.Height - bottomsize, bottomsize / 2, bottomsize);
 
                         text = _batterylevel.ToString("0.00v") + " " + _current.ToString("0.0 A") + " " + (_batteryremaining) + "%";
                         drawstring(text, font, fontsize + 1, textcolor, bottomsize / 2 + 6, yPos[1]);
@@ -3062,7 +3142,7 @@ namespace MissionPlanner.Controls
                             if (a == 1) hor_pos = this.Width - (((fontsize + 8) * 3)) - 3;
 
                             //DrawImage(icon, hor_pos, this.Height - ((fontsize + 2) * 3) - fontoffset + 2, (fontsize + 8) * 3, fontsize + 8);
-                            DrawImage(icon, hor_pos, this.Height - (fontsize + 13), (fontsize + 8) * 3, fontsize + 8);
+                            DrawIcon(icon, hor_pos, this.Height - (fontsize + 13), (fontsize + 8) * 3, fontsize + 8);
 
                         }
                         else
@@ -3227,7 +3307,7 @@ namespace MissionPlanner.Controls
                         {
                             if (displayicons)
                             {
-                                DrawImage(GetIcon(nameof(HUDT.vibe_red)), vibehitzone.X, vibehitzone.Y + 2, vibehitzone.Width, vibehitzone.Height);
+                                DrawIcon(GetIcon(nameof(HUDT.vibe_red)), vibehitzone.X, vibehitzone.Y + 2, vibehitzone.Width, vibehitzone.Height);
                             }
                             else
                             {
@@ -3238,7 +3318,7 @@ namespace MissionPlanner.Controls
                         {
                             if (displayicons)
                             {
-                                DrawImage(GetIcon(nameof(HUDT.vibe_yellow)), vibehitzone.X, vibehitzone.Y + 2, vibehitzone.Width, vibehitzone.Height);
+                                DrawIcon(GetIcon(nameof(HUDT.vibe_yellow)), vibehitzone.X, vibehitzone.Y + 2, vibehitzone.Width, vibehitzone.Height);
                             }
                             else
                             {
@@ -3251,7 +3331,7 @@ namespace MissionPlanner.Controls
                     {
                         if (displayicons)
                         {
-                            DrawImage(GetIcon(nameof(HUDT.vibe_green)), vibehitzone.X, vibehitzone.Y + 2, vibehitzone.Width, vibehitzone.Height);
+                            DrawIcon(GetIcon(nameof(HUDT.vibe_green)), vibehitzone.X, vibehitzone.Y + 2, vibehitzone.Width, vibehitzone.Height);
                         }
                         else
                         {
@@ -3286,7 +3366,7 @@ namespace MissionPlanner.Controls
                         {
                             if (displayicons)
                             {
-                                DrawImage(GetIcon(nameof(HUDT.ekf_red)), ekfhitzone.X, ekfhitzone.Y + 2, ekfhitzone.Width, ekfhitzone.Height);
+                                DrawIcon(GetIcon(nameof(HUDT.ekf_red)), ekfhitzone.X, ekfhitzone.Y + 2, ekfhitzone.Width, ekfhitzone.Height);
                             }
                             else
                             {
@@ -3297,7 +3377,7 @@ namespace MissionPlanner.Controls
                         {
                             if (displayicons)
                             {
-                                DrawImage(GetIcon(nameof(HUDT.ekf_yellow)), ekfhitzone.X, ekfhitzone.Y + 2, ekfhitzone.Width, ekfhitzone.Height);
+                                DrawIcon(GetIcon(nameof(HUDT.ekf_yellow)), ekfhitzone.X, ekfhitzone.Y + 2, ekfhitzone.Width, ekfhitzone.Height);
                             }
                             else
                             {
@@ -3309,7 +3389,7 @@ namespace MissionPlanner.Controls
                     {
                         if (displayicons)
                         {
-                            DrawImage(GetIcon(nameof(HUDT.ekf_green)), ekfhitzone.X, ekfhitzone.Y + 2, ekfhitzone.Width, ekfhitzone.Height);
+                            DrawIcon(GetIcon(nameof(HUDT.ekf_green)), ekfhitzone.X, ekfhitzone.Y + 2, ekfhitzone.Width, ekfhitzone.Height);
                         }
                         else
                         {
@@ -3340,7 +3420,7 @@ namespace MissionPlanner.Controls
                     {
                         if (displayicons)
                         {
-                            DrawImage(GetIcon(nameof(HUDT.prearm_green)), prearmhitzone.X, prearmhitzone.Y + 2, prearmhitzone.Width, prearmhitzone.Height);
+                            DrawIcon(GetIcon(nameof(HUDT.prearm_green)), prearmhitzone.X, prearmhitzone.Y + 2, prearmhitzone.Width, prearmhitzone.Height);
                         }
                         else
                         {
@@ -3351,7 +3431,7 @@ namespace MissionPlanner.Controls
                     {
                         if (displayicons)
                         {
-                            DrawImage(GetIcon(nameof(HUDT.prearm_red)), prearmhitzone.X, prearmhitzone.Y + 2, prearmhitzone.Width, prearmhitzone.Height);
+                            DrawIcon(GetIcon(nameof(HUDT.prearm_red)), prearmhitzone.X, prearmhitzone.Y + 2, prearmhitzone.Width, prearmhitzone.Height);
                         }
                         else
                         {
@@ -3780,6 +3860,17 @@ namespace MissionPlanner.Controls
             {
                 if (opengl && !DesignMode)
                 {
+                    // the GL context goes with the handle, and textures made in it are invalid in the next one
+                    try
+                    {
+                        MakeCurrent();
+                        ResetTextures(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        log.Error(ex);
+                    }
+
                     base.OnHandleDestroyed(e);
                 }
             }
@@ -3788,6 +3879,44 @@ namespace MissionPlanner.Controls
                 log.Info(ex.ToString());
                 opengl = false;
             }
+        }
+
+        /// <summary>
+        /// Frees the glyph bitmaps and the DrawImage textures so they are rebuilt on the next frame.
+        /// </summary>
+        /// <param name="deleteGL">delete the GL textures too; only when this HUD's context is current</param>
+        private void ResetTextures(bool deleteGL)
+        {
+            foreach (character texid in charDict.Values)
+            {
+                try
+                {
+                    texid.bitmap.Dispose();
+                }
+                catch
+                {
+                }
+
+                if (deleteGL && texid.gltextureid != 0)
+                    GL.DeleteTexture(texid.gltextureid);
+            }
+
+            charDict.Clear();
+
+            foreach (character texid in _texture.Concat(imageTextures.Values))
+            {
+                if (texid == null)
+                    continue;
+
+                if (deleteGL && texid.gltextureid != 0)
+                    GL.DeleteTexture(texid.gltextureid);
+
+                if (texid.ownsBitmap)
+                    texid.bitmap.Dispose();
+            }
+
+            this._texture = new character[_texture.Length];
+            imageTextures.Clear();
         }
 
         public void doResize()
@@ -3830,35 +3959,10 @@ namespace MissionPlanner.Controls
 
             try
             {
-                foreach (character texid in charDict.Values)
-                {
-                    try
-                    {
-                        texid.bitmap.Dispose();
-                    }
-                    catch
-                    {
-                    }
-                }
-
                 if (opengl)
-                {
-                    foreach (character texid in _texture)
-                    {
-                        if (texid != null && texid.gltextureid != 0)
-                            GL.DeleteTexture(texid.gltextureid);
-                    }
+                    MakeCurrent();
 
-                    this._texture = new character[_texture.Length];
-
-                    foreach (character texid in charDict.Values)
-                    {
-                        if (texid.gltextureid != 0)
-                            GL.DeleteTexture(texid.gltextureid);
-                    }
-                }
-
-                charDict.Clear();
+                ResetTextures(opengl);
             }
             catch
             {
