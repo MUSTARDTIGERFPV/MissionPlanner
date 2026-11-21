@@ -836,7 +836,7 @@ namespace MissionPlanner.GCSViews
         /// Gets the fence from the vehicle and shows it. The requests wait off the UI thread, with user
         /// input ignored until they are done (see <see cref="VehicleRequest"/>).
         /// </summary>
-        internal async Task DownloadGeoFenceAsync()
+        public async Task DownloadGeoFenceAsync()
         {
             polygongridmode = false;
             int count = 1;
@@ -960,7 +960,7 @@ namespace MissionPlanner.GCSViews
         /// Gets the rally points from the vehicle and shows them. The requests wait off the UI thread, with
         /// user input ignored until they are done (see <see cref="VehicleRequest"/>).
         /// </summary>
-        internal async Task GetRallyPointsAsync()
+        public async Task GetRallyPointsAsync()
         {
             if ((MainV2.comPort.MAV.cs.capabilities & (uint) MAVLink.MAV_PROTOCOL_CAPABILITY.MISSION_RALLY) >= 0)
             {
