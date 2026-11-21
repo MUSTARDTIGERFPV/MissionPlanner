@@ -190,7 +190,9 @@ namespace MissionPlanner.Utilities.Tests
         }
 
         [TestMethod]
-        public void ReadThemeFileIsFasterThanSerializer()
+        // Reports timings only: if another test in this process already built the serializer, its
+        // first-use cost is gone, so a speed assertion here would be flaky
+        public void ReportFirstThemeReadTimes()
         {
             var theme = FindRepoFile("BurntKermit.mpsystheme");
 
