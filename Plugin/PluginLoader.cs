@@ -167,21 +167,7 @@ namespace MissionPlanner.Plugin
                                 //pluginInfo.GetConstructor(Type.EmptyTypes);
                                 Object o = Expression.Lambda<Func<object>>(Expression.New(pluginInfo)).Compile()();
                                 //Object o = Activator.CreateInstance(pluginInfo, BindingFlags.Default, null, null, CultureInfo.CurrentUICulture);
-                                Plugin plugin = (Plugin)o;
-
-                                plugin.Assembly = asm;
-
-                                plugin.Host = new PluginHost();
-                                plugin.FileName = Path.GetFileName(pluginfilename);
-
-                                if (plugin.Init())
-                                {
-                                    log.InfoFormat("Plugin Init {0} {1} by {2}", plugin.Name, plugin.Version, plugin.Author);
-                                    lock (LoadingPlugins)
-                                    {
-                                        LoadingPlugins.Add(plugin);
-                                    }
-                                }
+                                InitPlugin((Plugin)o, asm, pluginfilename);
                             }
                             catch (Exception ex)
                             {
@@ -199,6 +185,38 @@ namespace MissionPlanner.Plugin
             catch (Exception ex)
             {
                 log.Error("Failed to load plugin " + asm.FullName, ex);
+            }
+        }
+
+        static void InitPlugin(Plugin plugin, Assembly asm, string pluginfilename)
+        {
+            plugin.Assembly = asm;
+
+            plugin.Host = new PluginHost();
+            plugin.FileName = Path.GetFileName(pluginfilename);
+
+            if (plugin.Init())
+            {
+                log.InfoFormat("Plugin Init {0} {1} by {2}", plugin.Name, plugin.Version, plugin.Author);
+                lock (LoadingPlugins)
+                {
+                    LoadingPlugins.Add(plugin);
+                }
+            }
+        }
+
+        // plugins compiled into MissionPlanner.exe. These are created directly: scanning the exe with
+        // GetTypes() loads every assembly any of its types references, on the UI thread at startup
+        static void InitBuiltinPlugins()
+        {
+            var self = typeof(PluginLoader).Assembly;
+            try
+            {
+                InitPlugin(new MissionPlanner.Grid.GridPlugin(), self, "self");
+            }
+            catch (Exception ex)
+            {
+                log.Error("Failed to load plugin " + self.FullName, ex);
             }
         }
 
@@ -307,7 +325,7 @@ namespace MissionPlanner.Plugin
             foreach (var s in files)
                 Load(Path.Combine(Environment.CurrentDirectory, s));
 
-            InitPlugin(Assembly.GetAssembly(typeof(PluginLoader)), "self");
+            InitBuiltinPlugins();
 
             PluginInit();
         }
