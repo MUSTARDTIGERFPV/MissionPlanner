@@ -40,7 +40,8 @@ namespace MissionPlanner.Utilities
     /// Call it from the UI thread, and only touch controls before and after the await: the request
     /// itself runs on the thread pool. Called from another thread, it only runs the request on the
     /// thread pool, after any request before it. Prompts belong outside it, where the user can answer them.
-    /// Exceptions thrown by the request are rethrown to the caller once input is restored.
+    /// Exceptions thrown by the request are rethrown to the caller once input is restored. A wait
+    /// cursor shows once a request has taken more than 150 ms.
     /// </remarks>
     public static class VehicleRequest
     {
@@ -48,6 +49,9 @@ namespace MissionPlanner.Utilities
         private static readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
         private static int depth;
         private static bool waitCursorWas;
+        private static bool waitCursorSet;
+        // counts the times input was blocked, so a late wait cursor timer can tell it is stale
+        private static int generation;
         // the window that held the mouse capture when input was blocked, until it gets its button release
         private static IntPtr captureWindow;
 
@@ -112,15 +116,26 @@ namespace MissionPlanner.Utilities
             {
                 captureWindow = GetCaptureWindow();
                 Application.AddMessageFilter(blocker);
-                try
+
+                // most requests are answered within a link round trip; only show the wait cursor for
+                // the ones that take longer, so a quick one does not flicker it
+                var current = ++generation;
+                Task.Delay(150).ContinueWith(_ =>
                 {
-                    waitCursorWas = Application.UseWaitCursor;
-                    Application.UseWaitCursor = true;
-                }
-                catch
-                {
-                    // only cosmetic
-                }
+                    if (depth == 0 || current != generation || waitCursorSet)
+                        return;
+                    try
+                    {
+                        waitCursorWas = Application.UseWaitCursor;
+                        Application.UseWaitCursor = true;
+                        waitCursorSet = true;
+                    }
+                    catch
+                    {
+                        // only cosmetic
+                    }
+                }, CancellationToken.None, TaskContinuationOptions.None,
+                    TaskScheduler.FromCurrentSynchronizationContext());
             }
         }
 
@@ -130,13 +145,17 @@ namespace MissionPlanner.Utilities
             {
                 Application.RemoveMessageFilter(blocker);
                 captureWindow = IntPtr.Zero;
-                try
+                if (waitCursorSet)
                 {
-                    Application.UseWaitCursor = waitCursorWas;
-                }
-                catch
-                {
-                    // only cosmetic
+                    waitCursorSet = false;
+                    try
+                    {
+                        Application.UseWaitCursor = waitCursorWas;
+                    }
+                    catch
+                    {
+                        // only cosmetic
+                    }
                 }
             }
         }
