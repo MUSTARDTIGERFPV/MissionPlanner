@@ -150,6 +150,22 @@ namespace MissionPlanner.GCSViews
         GMapOverlay routes;
         GMapOverlay adsbais;
 
+        // map objects kept across map updates and moved in place, rather than recreated every update
+        GMarkerGoogle baseMarker;
+        GMarkerGoogle gimbalMarker;
+        readonly Dictionary<string, GMapMarkerDistance> oadbMarkers = new Dictionary<string, GMapMarkerDistance>();
+        GMapPolygon cameraBoundsPolygon;
+        static readonly Pen oadbPen = new Pen(Color.Red, 3);
+        static readonly Pen cameraBoundsPen = new Pen(Color.DarkBlue, 3);
+
+        // what the mission, fence and rally/airport overlays were last drawn from, so the periodic redraw
+        // only rebuilds them when that changed
+        WPOverlay missionOverlay;
+        GMapOverlay fenceOverlay;
+        MapInputs missionInputs;
+        MapInputs fenceInputs;
+        MapInputs rallyInputs;
+
         Script script;
 
         //whether or not a script is running
@@ -978,6 +994,21 @@ namespace MissionPlanner.GCSViews
                     return;
 
                 addMissionRouteMarker(marker);
+            });
+        }
+
+        /// <summary>
+        /// Moves a marker that is kept across map updates, and puts it back on the routes overlay when it is not
+        /// there (it is new, or the periodic updateClearMissionRouteMarkers removed it).
+        /// </summary>
+        private void updateMissionRouteMarker(GMapMarker marker, PointLatLng position, string tooltip)
+        {
+            this.BeginInvokeIfRequired(() =>
+            {
+                marker.Position = position;
+                marker.ToolTipText = tooltip;
+                if (!routes.Markers.Contains(marker))
+                    addMissionRouteMarker(marker);
             });
         }
 
@@ -3955,39 +3986,40 @@ namespace MissionPlanner.GCSViews
                                         MainV2.comPort.MAV.cs.PlannedHomeLocation.Alt / CurrentState.multiplieralt, "H");
                                 }
 
-                                var wpOverlay = new WPOverlay();
-
+                                // only rebuild the mission overlay when what it is drawn from changed
+                                var missioninputs = new MapInputs(wps, homeplla.Lat, homeplla.Lng, homeplla.Alt,
+                                    CurrentState.multiplieralt);
+                                if (missionOverlay == null || !MapInputs.Same(missioninputs, missionInputs) ||
+                                    !gMapControl1.Overlays.Contains(missionOverlay.overlay))
                                 {
-                                    List<Locationwp> mission_items;
-                                    mission_items = MainV2.comPort.MAV.wps.Values.Select(a => (Locationwp) a).ToList();
-                                    mission_items.RemoveAt(0);
+                                    var newOverlay = new WPOverlay();
 
-                                    if (wps.Count == 1)
                                     {
-                                        wpOverlay.CreateOverlay(homeplla,
+                                        List<Locationwp> mission_items;
+                                        mission_items = wps.Select(a => (Locationwp) a).ToList();
+                                        mission_items.RemoveAt(0);
+
+                                        newOverlay.CreateOverlay(homeplla,
                                             mission_items,
                                             0 / CurrentState.multiplieralt, 0 / CurrentState.multiplieralt,
                                             CurrentState.multiplieralt);
                                     }
-                                    else
+
+                                    var existing = gMapControl1.Overlays.Where(a => a.Id == newOverlay.overlay.Id).ToList();
+                                    foreach (var b in existing)
                                     {
-                                        wpOverlay.CreateOverlay(homeplla,
-                                            mission_items,
-                                            0 / CurrentState.multiplieralt, 0 / CurrentState.multiplieralt,
-                                            CurrentState.multiplieralt);
-
+                                        gMapControl1.Overlays.Remove(b);
                                     }
+
+                                    gMapControl1.Overlays.Insert(1, newOverlay.overlay);
+
+                                    newOverlay.overlay.ForceUpdate();
+
+                                    missionOverlay = newOverlay;
+                                    missionInputs = missioninputs;
                                 }
 
-                                var existing = gMapControl1.Overlays.Where(a => a.Id == wpOverlay.overlay.Id).ToList();
-                                foreach (var b in existing)
-                                {
-                                    gMapControl1.Overlays.Remove(b);
-                                }
-
-                                gMapControl1.Overlays.Insert(1, wpOverlay.overlay);
-
-                                wpOverlay.overlay.ForceUpdate();
+                                var wpOverlay = missionOverlay;
 
                                 try
                                 {
@@ -4029,36 +4061,61 @@ namespace MissionPlanner.GCSViews
 
                             RegeneratePolygon();
 
-                            // update rally points
+                            // update rally points, and the airports that share their overlay
+                            var rallypoints = MainV2.comPort.MAV.rallypoints.Values.ToList();
+                            var airports = MainV2.ShowAirports
+                                ? Airports.getAirports(gMapControl1.Position).ToArray()
+                                : new PointLatLngAlt[0];
+                            var rallyinputs = new MapInputs(rallypoints.Cast<object>().Concat(airports),
+                                CurrentState.multiplieralt);
+                            var rallychanged = !MapInputs.Same(rallyinputs, rallyInputs);
+                            rallyInputs = rallyinputs;
 
-                            rallypointoverlay.Markers.Clear();
-
-                            foreach (var mark in MainV2.comPort.MAV.rallypoints.Values)
+                            if (rallychanged)
                             {
-                                rallypointoverlay.Markers.Add(new GMapMarkerRallyPt(new PointLatLngAlt(mark), CurrentState.multiplieralt));
+                                rallypointoverlay.Markers.Clear();
+
+                                foreach (var mark in rallypoints)
+                                {
+                                    rallypointoverlay.Markers.Add(new GMapMarkerRallyPt(new PointLatLngAlt(mark), CurrentState.multiplieralt));
+                                }
                             }
 
-                            geofence.Clear();
+                            // the flight planner may have drawn a geofence here; it is cleared as before
+                            if (geofence.Markers.Count > 0 || geofence.Routes.Count > 0 ||
+                                geofence.Polygons.Count > 0)
+                                geofence.Clear();
 
-                            var fenceoverlay = new WPOverlay();
-                            fenceoverlay.overlay.Id = "fence";
+                            var home = MainV2.comPort.MAV.cs.HomeLocation;
+                            var fencepoints = MainV2.comPort.MAV.fencepoints.Values.ToList();
+                            var fenceinputs = new MapInputs(fencepoints, home?.Lat, home?.Lng, home?.Alt,
+                                CurrentState.multiplieralt);
+                            if (fenceOverlay == null || !MapInputs.Same(fenceinputs, fenceInputs) ||
+                                !mymap.Overlays.Contains(fenceOverlay))
+                            {
+                                var fenceoverlay = new WPOverlay();
+                                fenceoverlay.overlay.Id = "fence";
 
-                            fenceoverlay.CreateOverlay(PointLatLngAlt.Zero,
-                                MainV2.comPort.MAV.fencepoints.Values.Select(a => (Locationwp) a).ToList(), 0, 0,
-                                CurrentState.multiplieralt, MainV2.comPort.MAV.cs.HomeLocation);
+                                fenceoverlay.CreateOverlay(PointLatLngAlt.Zero,
+                                    fencepoints.Select(a => (Locationwp) a).ToList(), 0, 0,
+                                    CurrentState.multiplieralt, home);
 
-                            var fence = mymap.Overlays.Where(a => a.Id == "fence");
-                            if (fence.Count() > 0)
-                                mymap.Overlays.Remove(fence.First());
-                            mymap.Overlays.Add(fenceoverlay.overlay);
+                                var fence = mymap.Overlays.Where(a => a.Id == "fence");
+                                if (fence.Count() > 0)
+                                    mymap.Overlays.Remove(fence.First());
+                                mymap.Overlays.Add(fenceoverlay.overlay);
 
-                            fenceoverlay.overlay.ForceUpdate();
+                                fenceoverlay.overlay.ForceUpdate();
+
+                                fenceOverlay = fenceoverlay.overlay;
+                                fenceInputs = fenceinputs;
+                            }
 
                             // optional on Flight data
-                            if (MainV2.ShowAirports)
+                            if (rallychanged)
                             {
                                 // airports
-                                foreach (var item in Airports.getAirports(gMapControl1.Position).ToArray())
+                                foreach (var item in airports)
                                 {
                                     try
                                     {
@@ -4087,12 +4144,12 @@ namespace MissionPlanner.GCSViews
                         if (MainV2.comPort.MAV.cs.Base != null &&
                             MainV2.comPort.MAV.cs.Base != PointLatLngAlt.Zero)
                         {
-                            addMissionRouteMarker(new GMarkerGoogle(currentloc, GMarkerGoogleType.blue_dot)
-                            {
-                                Position = MainV2.comPort.MAV.cs.Base,
-                                ToolTipText = "Base",
-                                ToolTipMode = MarkerTooltipMode.OnMouseOver
-                            });
+                            if (baseMarker == null)
+                                baseMarker = new GMarkerGoogle(currentloc, GMarkerGoogleType.blue_dot)
+                                {
+                                    ToolTipMode = MarkerTooltipMode.OnMouseOver
+                                };
+                            updateMissionRouteMarker(baseMarker, MainV2.comPort.MAV.cs.Base, "Base");
                         }
 
                         // add gimbal point center
@@ -4120,11 +4177,12 @@ namespace MissionPlanner.GCSViews
                                     {
                                         MainV2.comPort.MAV.cs.GimbalPoint = marker;
 
-                                        addMissionRouteMarker(new GMarkerGoogle(marker, GMarkerGoogleType.blue_dot)
-                                        {
-                                            ToolTipText = "Camera Target\n" + marker,
-                                            ToolTipMode = MarkerTooltipMode.OnMouseOver
-                                        });
+                                        if (gimbalMarker == null)
+                                            gimbalMarker = new GMarkerGoogle(marker, GMarkerGoogleType.blue_dot)
+                                            {
+                                                ToolTipMode = MarkerTooltipMode.OnMouseOver
+                                            };
+                                        updateMissionRouteMarker(gimbalMarker, marker, "Camera Target\n" + marker);
                                     }
                                 }
                             }
@@ -4249,6 +4307,7 @@ namespace MissionPlanner.GCSViews
                         lock (MainV2.instance.adsblock)
                         {
                             // draw OA_DB
+                            var oadbtags = new HashSet<string>();
                             foreach (adsb.PointLatLngAltHdg plla in MainV2.instance.adsbPlanes.Values)
                             {
                                 if (plla.Raw != null)
@@ -4260,13 +4319,27 @@ namespace MissionPlanner.GCSViews
                                         // cm
                                         var radius = msg.squawk;
 
+                                        oadbtags.Add(plla.Tag);
                                         if (((DateTime) plla.Time) > DateTime.Now.AddSeconds(-10))
-                                            addMissionRouteMarker(new GMapMarkerDistance(plla, radius / 100.0, 0)
-                                                {Pen = new Pen(Color.Red, 3)});
+                                        {
+                                            GMapMarkerDistance oadb;
+                                            if (!oadbMarkers.TryGetValue(plla.Tag, out oadb))
+                                            {
+                                                oadb = new GMapMarkerDistance(plla, radius / 100.0, 0) {Pen = oadbPen};
+                                                oadbMarkers[plla.Tag] = oadb;
+                                            }
+
+                                            oadb.wprad = radius / 100.0;
+                                            updateMissionRouteMarker(oadb, plla, null);
+                                        }
                                         continue;
                                     }
                                 }
                             }
+
+                            // forget OA_DB items that are gone; their markers go with the periodic routes clear
+                            foreach (var tag in oadbMarkers.Keys.Where(a => !oadbtags.Contains(a)).ToArray())
+                                oadbMarkers.Remove(tag);
 
                             // filter out OA_DB adsb
                             var adsbitems = MainV2.instance.adsbPlanes.Values.Where(a =>
@@ -4399,8 +4472,8 @@ namespace MissionPlanner.GCSViews
                         prop.altasl = MainV2.comPort.MAV.cs.altasl / CurrentState.multiplieralt;
                         prop.center = gMapControl1.Position;
 
-                        // Update camera bounds
-                        cameraBounds.Polygons.Clear();
+                        // Update camera bounds - only touched when the footprint changed, as that redraws the map
+                        List<PointLatLng> camerapoints = null;
                         if (MainV2.comPort?.MAV?.Camera != null)
                         {
                             var cam = MainV2.comPort.MAV.Camera;
@@ -4411,23 +4484,32 @@ namespace MissionPlanner.GCSViews
 
                             if(p1 != null && p2 != null && p3 != null && p4 != null)
                             {
-                                cameraBounds.Polygons.Add(
-                                    new GMap.NET.WindowsForms.GMapPolygon(
-                                        new List<GMap.NET.PointLatLng>
-                                        {
-                                            new GMap.NET.PointLatLng(p1.Lat, p1.Lng),
-                                            new GMap.NET.PointLatLng(p2.Lat, p2.Lng),
-                                            new GMap.NET.PointLatLng(p3.Lat, p3.Lng),
-                                            new GMap.NET.PointLatLng(p4.Lat, p4.Lng)
-                                        },
-                                        "CameraBounds"
-                                    )
-                                    {
-                                        Fill = Brushes.Transparent,
-                                        Stroke = new Pen(Color.DarkBlue, 3)
-                                    }
-                                );
+                                camerapoints = new List<GMap.NET.PointLatLng>
+                                {
+                                    new GMap.NET.PointLatLng(p1.Lat, p1.Lng),
+                                    new GMap.NET.PointLatLng(p2.Lat, p2.Lng),
+                                    new GMap.NET.PointLatLng(p3.Lat, p3.Lng),
+                                    new GMap.NET.PointLatLng(p4.Lat, p4.Lng)
+                                };
                             }
+                        }
+
+                        if (camerapoints == null)
+                        {
+                            if (cameraBounds.Polygons.Count > 0)
+                                cameraBounds.Polygons.Clear();
+                        }
+                        else if (cameraBoundsPolygon == null || cameraBounds.Polygons.Count != 1 ||
+                                 cameraBounds.Polygons[0] != cameraBoundsPolygon ||
+                                 !cameraBoundsPolygon.Points.SequenceEqual(camerapoints))
+                        {
+                            cameraBounds.Polygons.Clear();
+                            cameraBoundsPolygon = new GMap.NET.WindowsForms.GMapPolygon(camerapoints, "CameraBounds")
+                            {
+                                Fill = Brushes.Transparent,
+                                Stroke = cameraBoundsPen
+                            };
+                            cameraBounds.Polygons.Add(cameraBoundsPolygon);
                         }
 
                         gMapControl1.HoldInvalidation = false;
@@ -4508,6 +4590,27 @@ namespace MissionPlanner.GCSViews
                 if (sublist.Count() > 1)
                     BeginInvoke((Action) delegate { gMapOverlay.Markers.Remove(sublist.Last()); });
             });
+        }
+
+        /// <summary>
+        /// The inputs a map overlay was last drawn from, so the periodic redraw can leave it alone when they are
+        /// unchanged. Items and values are compared with Equals.
+        /// </summary>
+        private sealed class MapInputs
+        {
+            private readonly object[] items;
+            private readonly object[] values;
+
+            public MapInputs(System.Collections.IEnumerable items, params object[] values)
+            {
+                this.items = items.Cast<object>().ToArray();
+                this.values = values;
+            }
+
+            public static bool Same(MapInputs a, MapInputs b)
+            {
+                return a != null && b != null && a.items.SequenceEqual(b.items) && a.values.SequenceEqual(b.values);
+            }
         }
 
         private void Messagetabtimer_Tick(object sender, EventArgs e)
