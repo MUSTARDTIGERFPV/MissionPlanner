@@ -119,6 +119,8 @@
       }
 
       GraphicsPath graphicsPath;
+      // first point of graphicsPath; PathPoints copies the whole array
+      Point graphicsPathFirstPoint;
        public void UpdateGraphicsPath()
       {
           if (graphicsPath == null)
@@ -158,6 +160,9 @@
               pnts.Add(new Point((int) LocalPoints[LocalPoints.Count - 1].X,
                   (int) LocalPoints[LocalPoints.Count - 1].Y));
 
+              if (pnts.Count >= 2)
+                  graphicsPathFirstPoint = pnts[0];
+
               if (pnts.Count > 2)
               {
                   graphicsPath.AddPolygon(pnts.ToArray());
@@ -183,7 +188,7 @@
                      if (graphicsPath.PointCount == 0)
                          return;
 
-                     var firstpoint = graphicsPath.PathPoints[0];
+                     var firstpoint = graphicsPathFirstPoint;
                      var maxx = Math.Abs(firstpoint.X);
                      var maxy = Math.Abs(firstpoint.Y);
                      // max graphics size
