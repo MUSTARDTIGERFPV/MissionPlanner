@@ -265,7 +265,7 @@ namespace MissionPlanner.Utilities
 
             try
             {
-                ThemeManager.thmColor = ThemeManager.ReadFromXmlFile<ThemeColorTable>(themeFileToLoad);
+                ThemeManager.thmColor = ThemeManager.ReadThemeFile(themeFileToLoad);
                 if (ThemeManager.thmColor != null)
                     ThemeManager.thmColor.strThemeName = strThemeName;
 
@@ -1395,6 +1395,182 @@ mc:Ignorable=""d""
                 if (writer != null)
                     writer.Close();
             }
+        }
+
+        /// <summary>
+        /// Reads a theme file written by <see cref="WriteToXmlFile{T}"/>, giving the same result as
+        /// ReadFromXmlFile&lt;ThemeColorTable&gt;. On .NET Framework XmlSerializer cannot build its fast
+        /// reader for ThemeColorTable and compiles one with csc.exe instead, at every launch; this reads
+        /// the file directly. Returns null if the file cannot be read.
+        /// </summary>
+        public static ThemeColorTable ReadThemeFile(string filePath)
+        {
+            try
+            {
+                using (var stream = new StreamReader(filePath))
+                // the reader XmlSerializer.Deserialize(TextReader) uses
+                using (var reader = new XmlTextReader(stream)
+                {
+                    WhitespaceHandling = WhitespaceHandling.Significant, Normalization = true,
+                    XmlResolver = null
+                })
+                {
+                    reader.MoveToContent();
+                    if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "ThemeColorTable" ||
+                        reader.NamespaceURI != "")
+                        throw new XmlException("unexpected root element " + reader.Name);
+
+                    var table = new ThemeColorTable();
+                    bool name = false, icons = false, terminal = false;
+                    ReadThemeChildren(reader, () =>
+                    {
+                        if (!name && IsThemeElement(reader, "strThemeName"))
+                        {
+                            table.strThemeName = reader.ReadElementString();
+                            name = true;
+                        }
+                        else if (IsThemeElement(reader, "colors"))
+                        {
+                            ReadThemeChildren(reader, () =>
+                            {
+                                if (!IsThemeElement(reader, "ThemeColor"))
+                                {
+                                    reader.Skip();
+                                }
+                                else if (IsNil(reader))
+                                {
+                                    // the serializer reads a nil list item as null
+                                    reader.Skip();
+                                    table.colors.Add(null);
+                                }
+                                else
+                                {
+                                    table.colors.Add(ReadThemeColor(reader));
+                                }
+                            });
+                        }
+                        else if (!icons && IsThemeElement(reader, "iconSet"))
+                        {
+                            var value = reader.ReadElementString();
+                            switch (value)
+                            {
+                                case "BurnKermitIconSet":
+                                    table.iconSet = ThemeColorTable.IconSet.BurnKermitIconSet;
+                                    break;
+                                case "HighContrastIconSet":
+                                    table.iconSet = ThemeColorTable.IconSet.HighContrastIconSet;
+                                    break;
+                                default:
+                                    throw new XmlException("unknown iconSet " + value);
+                            }
+
+                            icons = true;
+                        }
+                        else if (!terminal && IsThemeElement(reader, "terminalTheming"))
+                        {
+                            table.terminalTheming = XmlConvert.ToBoolean(reader.ReadElementString());
+                            terminal = true;
+                        }
+                        else
+                        {
+                            reader.Skip();
+                        }
+                    });
+
+                    return table;
+                }
+            }
+            catch (Exception exception)
+            {
+                log.Error(exception);
+                return null;
+            }
+        }
+
+        static ThemeColor ReadThemeColor(XmlReader reader)
+        {
+            var color = new ThemeColor();
+            bool item = false, clr = false, variable = false;
+            ReadThemeChildren(reader, () =>
+            {
+                if (!item && IsThemeElement(reader, "strColorItemName"))
+                {
+                    color.strColorItemName = reader.ReadElementString();
+                    item = true;
+                }
+                else if (!clr && IsThemeElement(reader, "clrColor"))
+                {
+                    // set through XmlColor in file order, as the serializer does: the result of
+                    // Web depends on whether Alpha came first
+                    var xml = new XmlColor();
+                    bool web = false, alpha = false;
+                    while (reader.MoveToNextAttribute())
+                    {
+                        if (!web && reader.LocalName == "Web" && reader.NamespaceURI == "")
+                        {
+                            xml.Web = reader.Value;
+                            web = true;
+                        }
+                        else if (!alpha && reader.LocalName == "Alpha" && reader.NamespaceURI == "")
+                        {
+                            xml.Alpha = XmlConvert.ToByte(reader.Value);
+                            alpha = true;
+                        }
+                    }
+
+                    reader.MoveToElement();
+                    reader.Skip();
+                    color.clrColor = xml;
+                    clr = true;
+                }
+                else if (!variable && IsThemeElement(reader, "strVariableName"))
+                {
+                    color.strVariableName = reader.ReadElementString();
+                    variable = true;
+                }
+                else
+                {
+                    reader.Skip();
+                }
+            });
+            return color;
+        }
+
+        static bool IsNil(XmlReader reader)
+        {
+            var nil = reader.GetAttribute("nil", "http://www.w3.org/2001/XMLSchema-instance") ??
+                      reader.GetAttribute("nil", "http://www.w3.org/2000/10/XMLSchema-instance") ??
+                      reader.GetAttribute("nil", "http://www.w3.org/1999/XMLSchema-instance");
+            return nil != null && XmlConvert.ToBoolean(nil);
+        }
+
+        static bool IsThemeElement(XmlReader reader, string name)
+        {
+            return reader.LocalName == name && reader.NamespaceURI == "";
+        }
+
+        // calls readChild for each child element of the current element; readChild must consume it
+        static void ReadThemeChildren(XmlReader reader, Action readChild)
+        {
+            reader.MoveToElement();
+            if (reader.IsEmptyElement)
+            {
+                reader.Skip();
+                return;
+            }
+
+            reader.ReadStartElement();
+            reader.MoveToContent();
+            while (reader.NodeType != XmlNodeType.EndElement && reader.NodeType != XmlNodeType.None)
+            {
+                if (reader.NodeType == XmlNodeType.Element)
+                    readChild();
+                else
+                    reader.Skip();
+                reader.MoveToContent();
+            }
+
+            reader.ReadEndElement();
         }
 
         /// <summary>
