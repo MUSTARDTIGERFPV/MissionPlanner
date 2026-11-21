@@ -4,6 +4,7 @@ namespace GMap.NET.WindowsForms
    using System.Drawing;
    using System.IO;
    using System.Drawing.Imaging;
+   using System.Drawing.Drawing2D;
    using System;
    using System.Diagnostics;
    using GMap.NET.Internals;
@@ -69,7 +70,9 @@ namespace GMap.NET.WindowsForms
             {
                ret = new GMapImage();
 #if !PocketPC
-               ret.Img = ColorMatrix != null ? ApplyColorMatrix(m, ColorMatrix) : m;
+               // decode now, on the loader thread, so the first paint does not
+               // pay for it on the UI thread
+               ret.Img = DecodeToPArgb(m, ColorMatrix);
 #else
                ret.Img = m;
 #endif
@@ -120,26 +123,52 @@ namespace GMap.NET.WindowsForms
       }
 
 #if !PocketPC
-      Bitmap ApplyColorMatrix(Image original, ColorMatrix matrix)
+      /// <summary>
+      /// Decodes the image into a premultiplied 32bpp bitmap, applying the color
+      /// matrix if one is set, and disposes the original.
+      /// Image.FromStream without validation decodes lazily on the first DrawImage,
+      /// which for tiles is the UI thread; 32bppPArgb is also the format GDI+
+      /// blits fastest onto a screen surface.
+      /// </summary>
+      static Bitmap DecodeToPArgb(Image original, ColorMatrix matrix)
       {
-         // create a blank bitmap the same size as original
-         Bitmap newBitmap = new Bitmap(original.Width, original.Height);
-
          using(original) // destroy original
          {
-            // get a graphics object from the new image
-            using(Graphics g = Graphics.FromImage(newBitmap))
+            Bitmap newBitmap = new Bitmap(original.Width, original.Height, PixelFormat.Format32bppPArgb);
+            try
             {
-               // set the color matrix attribute
-               using(ImageAttributes attributes = new ImageAttributes())
+               newBitmap.SetResolution(original.HorizontalResolution, original.VerticalResolution);
+
+               using(Graphics g = Graphics.FromImage(newBitmap))
                {
-                  attributes.SetColorMatrix(matrix);
-                  g.DrawImage(original, new Rectangle(0, 0, original.Width, original.Height), 0, 0, original.Width, original.Height, GraphicsUnit.Pixel, attributes);
+                  g.CompositingMode = CompositingMode.SourceCopy;
+                  g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                  g.PixelOffsetMode = PixelOffsetMode.Half;
+
+                  var rect = new Rectangle(0, 0, original.Width, original.Height);
+                  if(matrix != null)
+                  {
+                     // set the color matrix attribute
+                     using(ImageAttributes attributes = new ImageAttributes())
+                     {
+                        attributes.SetColorMatrix(matrix);
+                        g.DrawImage(original, rect, 0, 0, original.Width, original.Height, GraphicsUnit.Pixel, attributes);
+                     }
+                  }
+                  else
+                  {
+                     g.DrawImage(original, rect, 0, 0, original.Width, original.Height, GraphicsUnit.Pixel);
+                  }
                }
             }
-         }
+            catch
+            {
+               newBitmap.Dispose();
+               throw;
+            }
 
-         return newBitmap;
+            return newBitmap;
+         }
       }
 #endif
    }
