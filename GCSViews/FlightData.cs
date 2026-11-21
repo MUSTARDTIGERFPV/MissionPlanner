@@ -557,7 +557,10 @@ namespace MissionPlanner.GCSViews
             // update tabs displayed
             updateDisplayView();
 
-            hud1.doResize();
+            // doResize drops the HUD's glyph cache and redraws it, which is only needed when the size changed while
+            // hidden (a real resize already runs it) or on Mono, where Deactivate shrinks the HUD
+            if (MainV2.MONO || hud1.Size != hudSizeAtDeactivate)
+                hud1.doResize();
         }
 
         public void BUT_playlog_Click(object sender, EventArgs e)
@@ -655,6 +658,9 @@ namespace MissionPlanner.GCSViews
             tickStart = Environment.TickCount;
         }
 
+        // HUD size when Flight Data was last hidden; empty until then, so the first Activate always resizes
+        private Size hudSizeAtDeactivate = Size.Empty;
+
         public void Deactivate()
         {
             if (MainV2.MONO)
@@ -669,6 +675,8 @@ namespace MissionPlanner.GCSViews
             Settings.Instance["maplast_lat"] = gMapControl1.Position.Lat.ToString();
             Settings.Instance["maplast_lng"] = gMapControl1.Position.Lng.ToString();
             Settings.Instance["maplast_zoom"] = gMapControl1.Zoom.ToString();
+
+            hudSizeAtDeactivate = hud1.Size;
 
             ZedGraphTimer.Stop();
         }
