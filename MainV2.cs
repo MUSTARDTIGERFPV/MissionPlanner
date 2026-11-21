@@ -1611,12 +1611,13 @@ namespace MissionPlanner
                                    dt + ".rlog";
 
                         // check if this logname already exists
+                        var basename = dt;
                         int a = 1;
-                        while (File.Exists(tlog))
+                        while (File.Exists(tlog) || File.Exists(rlog))
                         {
-                            Thread.Sleep(1000);
                             // create new names with a as an index
-                            dt = DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss") + "-" + a.ToString();
+                            dt = basename + "-" + a.ToString();
+                            a++;
                             tlog = Settings.Instance.LogDir + Path.DirectorySeparatorChar +
                                    dt + ".tlog";
                             rlog = Settings.Instance.LogDir + Path.DirectorySeparatorChar +
