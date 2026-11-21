@@ -5354,15 +5354,7 @@ namespace MissionPlanner.GCSViews
         {
             Messagetabtimer.Stop();
 
-            if (tabControlactions.SelectedTab == tabStatus)
-            {
-                tabControlactions.Visible = false;
-                tabStatus.Visible = false;
-                tabStatus_Resize(sender, e);
-                tabStatus.Visible = true;
-                tabControlactions.Visible = true;
-            }
-            else if (tabControlactions.SelectedTab == tabPagemessages)
+            if (tabControlactions.SelectedTab == tabPagemessages)
             {
                 Messagetabtimer.Start();
             }
@@ -5448,10 +5440,6 @@ namespace MissionPlanner.GCSViews
         {
             tableLayoutPanelQuick.Width = tabQuick.Width;
             tableLayoutPanelQuick.AutoScroll = false;
-        }
-
-        void tabStatus_Resize(object sender, EventArgs e)
-        {
         }
 
         private void takeOffToolStripMenuItem_Click(object sender, EventArgs e)
