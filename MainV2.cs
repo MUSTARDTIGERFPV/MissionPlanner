@@ -3626,17 +3626,36 @@ namespace MissionPlanner
                 }
             };
 
+            // prescan. The BLE and WinUSB static constructors add their ports to the port list; run
+            // those here as before. The scans themselves (native BLE init, SetupAPI enumeration) only
+            // warm caches and their results are not used here, so keep them off the UI thread
             try
             {
-                // prescan
                 if (Environment.OSVersion.Platform == PlatformID.Win32NT)
-                    MissionPlanner.Comms.CommsBLE.SerialPort_GetCustomPorts();
-
+                    System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(CommsBLE).TypeHandle);
 #if !LIB
-                MissionPlanner.Comms.CommsWinUSB.SerialPort_GetCustomPorts();
+                System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(CommsWinUSB).TypeHandle);
 #endif
             }
             catch { }
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                        MissionPlanner.Comms.CommsBLE.SerialPort_GetCustomPorts();
+                }
+                catch { }
+
+#if !LIB
+                try
+                {
+                    MissionPlanner.Comms.CommsWinUSB.SerialPort_GetCustomPorts();
+                }
+                catch { }
+#endif
+            });
 
             // add the custom port creator
             CustomPortList.Add(new Regex("BLE_.*"), (s1, s2) => { return new CommsBLE() { PortName = s1, BaudRate = int.Parse(s2) }; });
