@@ -1867,7 +1867,28 @@ namespace MissionPlanner.GCSViews
 
                     if (CMB_action.Text == actions.Preflight_Reboot_Shutdown.ToString())
                     {
-                        await VehicleRequest.RunAsync(() => port.doReboot());
+                        // what doReboot() does, except that it reconnects a direct USB link from the
+                        // request's thread, and the reconnect shows a dialog, which belongs on this one
+                        var sysid = port.sysidcurrent;
+                        var compid = (byte) port.compidcurrent;
+                        var rebooted = await VehicleRequest.RunAsync(() =>
+                        {
+                            var ans = port.doCommand(sysid, compid, MAVLink.MAV_CMD.PREFLIGHT_REBOOT_SHUTDOWN,
+                                          1, 0, 0, 0, 0, 0, 0) ||
+                                      port.doCommand(sysid, compid, MAVLink.MAV_CMD.PREFLIGHT_REBOOT_SHUTDOWN,
+                                          1, 0, 0, 0, 0, 0, 0);
+                            if (!ans)
+                                port.giveComport = false;
+                            // Direct USB will disconnect after a reboot, wait and see if we should re-connect
+                            else if (port.BaseStream is MissionPlanner.Comms.SerialPort)
+                                Thread.Sleep(500);
+                            return ans;
+                        });
+                        if (rebooted && port.BaseStream is MissionPlanner.Comms.SerialPort &&
+                            !port.BaseStream.IsOpen)
+                        {
+                            port.Open(true);
+                        }
                         ((Control) sender).Enabled = true;
                         return;
                     }
