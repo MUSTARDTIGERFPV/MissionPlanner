@@ -751,7 +751,7 @@ namespace MissionPlanner.GCSViews
             if (tabarray.Length == 0)
                 return;
 
-            tabControlactions.TabPages.Clear();
+            var wanted = new List<TabPage>();
 
             foreach (var tabname in tabarray)
             {
@@ -764,7 +764,7 @@ namespace MissionPlanner.GCSViews
 
                     if (tabPage.Name == tabname && ((TabListDisplay.ContainsKey(tabname) && TabListDisplay[tabname] == true) || !TabListDisplay.ContainsKey(tabname)))
                     {
-                        tabControlactions.TabPages.Add(tabPage);
+                        wanted.Add(tabPage);
                         log.Debug("add tabControlactions " + tabPage.Name);
                         added = true;
                         break;
@@ -774,6 +774,21 @@ namespace MissionPlanner.GCSViews
                 if(!added)
                     log.Debug("not added to tabControlactions " + tabname);
             }
+
+            // this runs on every Activate, and removing and re-adding every page costs ~150 ms,
+            // so only rebuild when the pages to show have changed
+            if (tabControlactions.TabPages.Cast<TabPage>().SequenceEqual(wanted))
+            {
+                // a rebuild leaves the first page selected; keep that behaviour
+                if (tabControlactions.TabPages.Count > 0 && tabControlactions.SelectedIndex != 0)
+                    tabControlactions.SelectedIndex = 0;
+                return;
+            }
+
+            tabControlactions.TabPages.Clear();
+
+            foreach (var tabPage in wanted)
+                tabControlactions.TabPages.Add(tabPage);
         }
 
         public void updateDisplayView()
