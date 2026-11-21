@@ -30,8 +30,13 @@ namespace MissionPlanner.Utilities
             remove { _onNewImage -= value; }
         }
 
-        private volatile bool threadShouldRun = true;
         private Thread _backgroundWorker;
+
+        /// <summary>
+        /// Stops the current worker. Each worker gets its own, so a worker that Stop gave up on cannot
+        /// be revived by the next Start
+        /// </summary>
+        private CancellationTokenSource _workerStop;
 
 #pragma warning disable IDE1006 // Naming Styles
 
@@ -1184,18 +1189,19 @@ namespace MissionPlanner.Utilities
         public Thread Start(string stringpipeline)
         {
             Stop();
-            _backgroundWorker = new Thread(ThreadStart) {IsBackground = true, Name = "gstreamer"};
-            _backgroundWorker.Start(stringpipeline);
+            var stop = new CancellationTokenSource();
+            _workerStop = stop;
+            _backgroundWorker = new Thread(() => ThreadStart(stringpipeline, stop.Token))
+                {IsBackground = true, Name = "gstreamer"};
+            _backgroundWorker.Start();
 
             return _backgroundWorker;
         }
 
 
         [HandleProcessCorruptedStateExceptions, SecurityCritical]
-        void ThreadStart(object datao)
+        void ThreadStart(string stringpipeline, CancellationToken stop)
         {
-            string stringpipeline = (string)datao;
-
             Environment.SetEnvironmentVariable("GST_DEBUG", "*:4");
 
             try
@@ -1274,33 +1280,34 @@ namespace MissionPlanner.Utilities
             int trys = 0;
             GstAppSinkCallbacks callbacks2 = callbacks;
 
-            threadShouldRun = true;
+            // set when the bus reports an error or EOS before the frame loop
+            bool ended = false;
 
             // not using appsink
             if (appsink == IntPtr.Zero && running)
             {
                 /* Wait until error or EOS, or Stop */
-                while (threadShouldRun)
+                while (!stop.IsCancellationRequested)
                 {
                     var msg = NativeMethods.gst_bus_timed_pop_filtered(bus, GST_SECOND / 4,
                         (int)(GstMessageType.GST_MESSAGE_ERROR | GstMessageType.GST_MESSAGE_EOS));
                     if (msg != IntPtr.Zero)
                         break;
                 }
-                threadShouldRun = false;
+                ended = true;
 
             }
             else {
                 var msg = NativeMethods.gst_bus_timed_pop_filtered(bus, 0,
                      (int)(GstMessageType.GST_MESSAGE_ERROR | GstMessageType.GST_MESSAGE_EOS));
                 if (msg != IntPtr.Zero)
-                    threadShouldRun = false;
+                    ended = true;
             }
 
             log.Info("start frame loop gst_app_sink_is_eos");
             // a short pull timeout lets Stop end the loop promptly
             int emptypulls = 0;
-            while (threadShouldRun && !NativeMethods.gst_app_sink_is_eos(appsink))
+            while (!ended && !stop.IsCancellationRequested && !NativeMethods.gst_app_sink_is_eos(appsink))
             {
                 try
                 {
@@ -1500,7 +1507,7 @@ namespace MissionPlanner.Utilities
 
         public void Stop()
         {
-            threadShouldRun = false;
+            _workerStop?.Cancel();
             // the worker wakes at least every 250 ms; it is a background thread, so do not wait on it for long
             if (_backgroundWorker != null && !_backgroundWorker.Join(2000))
                 log.Warn("gstreamer thread did not exit");
