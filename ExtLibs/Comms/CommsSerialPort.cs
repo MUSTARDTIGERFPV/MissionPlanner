@@ -211,6 +211,9 @@ namespace MissionPlanner.Comms
         private static Task<string[]> systemPortEnumeration;
         private static string[] lastSystemPorts = Array.Empty<string>();
 
+        private static readonly TimeSpan PortListCollectInterval = TimeSpan.FromSeconds(5);
+        private static DateTime lastPortListCollect = DateTime.MinValue;
+
         public new static string[] GetPortNames()
         {
             // prevent hammering
@@ -220,8 +223,13 @@ namespace MissionPlanner.Comms
 
                 if (Directory.Exists("/dev/"))
                 {
-                    // cleanup now
-                    GC.Collect();
+                    // cleanup now - releases leaked handles. a full collection pauses every thread
+                    // (the UI included), so callers that poll the port list only pay for it every few seconds
+                    if (DateTime.UtcNow - lastPortListCollect > PortListCollectInterval)
+                    {
+                        lastPortListCollect = DateTime.UtcNow;
+                        GC.Collect();
+                    }
                     // mono is failing in here on linux "too many open files"
                     try
                     {
