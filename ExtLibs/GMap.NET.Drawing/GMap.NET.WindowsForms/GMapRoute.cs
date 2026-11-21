@@ -161,11 +161,13 @@
             {
                 bool customarrows = false;
 
-                Pen Stroke = (Pen)this.Stroke.Clone();
+                Pen Stroke = this.Stroke;
 
+                // custom dash means "solid line with arrows"; only then is a modified copy needed
                 if (Stroke.DashStyle == DashStyle.Custom)
                 {
                     customarrows = true;
+                    Stroke = (Pen)Stroke.Clone();
                     Stroke.DashStyle = DashStyle.Solid;
                 }
 
@@ -224,6 +226,8 @@
                            last = item;
                        }
                    }
+
+                   Stroke.Dispose();
                }
             }
          }
