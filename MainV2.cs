@@ -2094,18 +2094,30 @@ namespace MissionPlanner
             log.Info("closing pluginthread");
 
             pluginthreadrun = false;
+            // wake it from its sleep between plugin loops
+            PluginThreadWake.Set();
 
             if (pluginthread != null)
             {
                 try
                 {
-                    while (!PluginThreadrunner.WaitOne(100)) Application.DoEvents();
+                    // keep pumping: plugin.Exit() runs on the plugin thread and may invoke onto this one.
+                    // it is a background thread, so a plugin that never returns cannot hold up closing
+                    var deadline = DateTime.Now.AddSeconds(3);
+                    while (!PluginThreadrunner.WaitOne(10))
+                    {
+                        if (DateTime.Now > deadline)
+                        {
+                            log.Warn("plugin thread did not exit");
+                            break;
+                        }
+
+                        Application.DoEvents();
+                    }
                 }
                 catch
                 {
                 }
-
-                pluginthread.Join();
             }
 
             log.Info("closing serialthread");
@@ -2521,6 +2533,11 @@ namespace MissionPlanner
 
         ManualResetEvent PluginThreadrunner = new ManualResetEvent(false);
 
+        /// <summary>
+        /// Set to end the plugin thread's sleep early
+        /// </summary>
+        ManualResetEventSlim PluginThreadWake = new ManualResetEventSlim(false);
+
         private void PluginThread()
         {
             Hashtable nextrun = new Hashtable();
@@ -2528,6 +2545,7 @@ namespace MissionPlanner
             pluginthreadrun = true;
 
             PluginThreadrunner.Reset();
+            PluginThreadWake.Reset();
 
             while (pluginthreadrun)
             {
@@ -2568,7 +2586,7 @@ namespace MissionPlanner
                 var sleepms = (int) ((minnextrun - DateTime.Now).TotalMilliseconds);
                 // max rate is 100 hz - prevent massive cpu usage
                 if (sleepms > 0)
-                    System.Threading.Thread.Sleep(sleepms);
+                    PluginThreadWake.Wait(sleepms);
             }
 
             while (Plugin.PluginLoader.Plugins.Count > 0)
