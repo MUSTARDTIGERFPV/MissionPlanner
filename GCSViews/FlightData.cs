@@ -1040,7 +1040,7 @@ namespace MissionPlanner.GCSViews
             }
         }
 
-        private void BUT_ARM_Click(object sender, EventArgs e)
+        private async void BUT_ARM_Click(object sender, EventArgs e)
         {
             if (!MainV2.comPort.BaseStream.IsOpen)
                 return;
@@ -1048,6 +1048,7 @@ namespace MissionPlanner.GCSViews
             // arm the MAV
             try
             {
+                var port = MainV2.comPort;
                 var isitarmed = MainV2.comPort.MAV.cs.armed;
                 var action = MainV2.comPort.MAV.cs.armed ? "Disarm" : "Arm";
 
@@ -1065,8 +1066,16 @@ namespace MissionPlanner.GCSViews
                             .TrimEnd('\0')));
                     return true;
                 }, MainV2.comPort.sysidcurrent, (byte)MainV2.comPort.compidcurrent);
-                bool ans = MainV2.comPort.doARM(!isitarmed);
-                MainV2.comPort.UnSubscribeToPacketType(sub);
+                // the prompts stay on the UI thread; only the requests wait off it
+                bool ans;
+                try
+                {
+                    ans = await VehicleRequest.RunAsync(() => port.doARM(!isitarmed));
+                }
+                finally
+                {
+                    port.UnSubscribeToPacketType(sub);
+                }
                 if (ans == false)
                 {
                     if (CustomMessageBox.Show(
@@ -1076,7 +1085,7 @@ namespace MissionPlanner.GCSViews
                             CustomMessageBox.MessageBoxIcon.Exclamation, "Force " + action, "Cancel") ==
                         CustomMessageBox.DialogResult.Yes)
                     {
-                        ans = MainV2.comPort.doARM(!isitarmed, true);
+                        ans = await VehicleRequest.RunAsync(() => port.doARM(!isitarmed, true));
                         if (ans == false)
                         {
                             CustomMessageBox.Show(Strings.ErrorRejectedByMAV, Strings.ERROR);
