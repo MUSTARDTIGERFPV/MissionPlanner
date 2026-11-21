@@ -356,38 +356,236 @@ namespace MissionPlanner.Comms
 
         public static Func<List<string>> GetCustomPorts;
 
-        public static string GetNiceName(string port)
-        {
-            // make sure we are exclusive
-            lock (locker)
-            {
-                if (port == "AUTO" || port == "UDP" || port == "UDPCl" || port == "TCP" || port == "WS")
-                    return "";
+        // guards comportnamecache and the background name lookup; separate from locker so a name
+        // lookup never holds up GetPortNames
+        private static readonly object namelocker = new object();
 
-                if (comportnamecache.ContainsKey(port))
+        // ports waiting for the background lookup, and whether that lookup is running
+        private static readonly HashSet<string> pendingNamePorts = new HashSet<string>();
+        private static Task nameLookup = Task.CompletedTask;
+        private static bool nameLookupRunning;
+
+        // ports that came back without a name are asked about again, but no more often than this
+        private static readonly TimeSpan EmptyNameRetryInterval = TimeSpan.FromSeconds(10);
+        private static DateTime lastEmptyNameRetry = DateTime.MinValue;
+
+        private static bool IsNetworkPort(string port)
+        {
+            return port == "AUTO" || port == "UDP" || port == "UDPCl" || port == "TCP" || port == "WS";
+        }
+
+        /// <summary>
+        /// Raised, on a background thread, when the background lookup added or changed nice names.
+        /// </summary>
+        public static event EventHandler NiceNamesChanged;
+
+        /// <summary>
+        /// The nice name of a port if it has been looked up already. Never blocks, so it is safe to
+        /// call while painting; a port that is not cached yet can be queued with RefreshNiceNames.
+        /// </summary>
+        public static bool TryGetCachedNiceName(string port, out string name)
+        {
+            name = "";
+            if (port == null || IsNetworkPort(port))
+                return true;
+
+            lock (namelocker)
+            {
+                if (comportnamecache.TryGetValue(port, out var cached))
                 {
-                    log.Info("done GetNiceName cache " + port + " " + comportnamecache[port]);
-                    return comportnamecache[port];
+                    name = cached;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Queue a background lookup of the ports that have no cached nice name (all of them in one
+        /// GetDeviceNames call) and return without waiting. NiceNamesChanged is raised once they are known.
+        /// </summary>
+        /// <returns>the lookup serving the request, for callers that want to wait for it</returns>
+        public static Task RefreshNiceNames(IEnumerable<string> ports)
+        {
+            lock (namelocker)
+            {
+                var retryEmpty = DateTime.UtcNow - lastEmptyNameRetry > EmptyNameRetryInterval;
+                var retriedEmpty = false;
+
+                foreach (var port in ports ?? Enumerable.Empty<string>())
+                {
+                    if (string.IsNullOrWhiteSpace(port) || IsNetworkPort(port))
+                        continue;
+
+                    if (comportnamecache.TryGetValue(port, out var cached))
+                    {
+                        if (cached != "" || !retryEmpty)
+                            continue;
+                        retriedEmpty = true;
+                    }
+
+                    pendingNamePorts.Add(port);
                 }
 
-                log.Info("start GetNiceName " + port);
+                if (retriedEmpty)
+                    lastEmptyNameRetry = DateTime.UtcNow;
 
-                // on timeout the lookup is left to finish on its own: aborting it mid WMI/COM call is unsafe,
-                // and its late result is discarded, so it cannot leak into the next port's lookup
-                var lookup = Task.Run(() => GetName(port));
-                var portnamenice = lookup.Wait(1000) ? lookup.Result : "";
+                if (pendingNamePorts.Count > 0 && !nameLookupRunning)
+                {
+                    nameLookupRunning = true;
+                    nameLookup = Task.Run(LookupPendingNames);
+                }
 
-                log.Info("done GetNiceName " + port + " = " + portnamenice);
-
-                comportnamecache[port] = portnamenice;
-
-                return portnamenice;
+                return nameLookup;
             }
+        }
+
+        public static string GetNiceName(string port)
+        {
+            if (port == null || IsNetworkPort(port))
+                return "";
+
+            if (TryGetCachedNiceName(port, out var name))
+            {
+                // a port with no name is asked about again in the background, rate limited
+                if (name == "")
+                    RefreshNiceNames(new[] { port });
+                return name;
+            }
+
+            // on timeout the lookup is left to finish in the background: aborting it mid WMI/COM call is
+            // unsafe. nothing is cached for the port until it does, so a later call can still get the name
+            var lookup = RefreshNiceNames(new[] { port });
+            try
+            {
+                lookup.Wait(1000);
+            }
+            catch (AggregateException ex)
+            {
+                log.Error(ex.InnerException ?? ex);
+            }
+
+            TryGetCachedNiceName(port, out name);
+            return name;
+        }
+
+        private static void LookupPendingNames()
+        {
+            // let a burst of requests (e.g. every item of a dropdown being painted) join one lookup
+            Thread.Sleep(50);
+
+            while (true)
+            {
+                string[] ports;
+                lock (namelocker)
+                {
+                    if (pendingNamePorts.Count == 0)
+                    {
+                        nameLookupRunning = false;
+                        return;
+                    }
+
+                    ports = pendingNamePorts.ToArray();
+                    pendingNamePorts.Clear();
+                }
+
+                var names = LookupNames(ports);
+
+                var changed = false;
+                lock (namelocker)
+                {
+                    foreach (var item in names)
+                    {
+                        if (comportnamecache.TryGetValue(item.Key, out var old) && old == item.Value)
+                            continue;
+                        comportnamecache[item.Key] = item.Value;
+                        changed = true;
+                    }
+                }
+
+                if (changed)
+                {
+                    try
+                    {
+                        NiceNamesChanged?.Invoke(null, EventArgs.Empty);
+                    }
+                    catch (Exception ex)
+                    {
+                        log.Error(ex);
+                    }
+                }
+            }
+        }
+
+        private static Dictionary<string, string> LookupNames(string[] ports)
+        {
+            log.Info("start GetNiceName " + string.Join(",", ports));
+
+            // every name the batch providers know, whether asked for or not, so ports appearing later are cached too
+            var known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var batch = GetDeviceNames;
+            if (batch != null)
+            {
+                foreach (EventArgsDeviceNames provider in batch.GetInvocationList())
+                {
+                    try
+                    {
+                        var names = provider(ports);
+                        if (names == null)
+                            continue;
+                        foreach (var item in names)
+                        {
+                            if (!string.IsNullOrWhiteSpace(item.Key) && !string.IsNullOrEmpty(item.Value) &&
+                                !known.ContainsKey(item.Key))
+                                known[item.Key] = item.Value;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // the ports are cached without a name and so retried, rate limited, by RefreshNiceNames
+                        log.Error("Failed to look up serial port names", ex);
+                    }
+                }
+            }
+
+            var result = new Dictionary<string, string>();
+            foreach (var item in known)
+                result[item.Key] = item.Value;
+
+            foreach (var port in ports)
+            {
+                if (known.TryGetValue(port, out var name))
+                {
+                    result[port] = name;
+                    continue;
+                }
+
+                // per port providers, for anything the batch providers did not name
+                result[port] = GetDeviceName != null ? GetName(port) : "";
+            }
+
+            log.Info("done GetNiceName " + string.Join(", ", ports.Select(p => p + " = " + result[p])));
+
+            return result;
         }
 
         public delegate string EventArgsDeviceName(string port);
 
+        /// <summary>
+        /// Looks up the nice name of one port. Kept for existing subscribers; GetDeviceNames is
+        /// preferred since it names every port in one call. Called on a background thread.
+        /// </summary>
         public static event EventArgsDeviceName GetDeviceName;
+
+        /// <param name="ports">the ports being asked about; the result may name others too</param>
+        /// <returns>nice names keyed by port name, ports without a name may be left out</returns>
+        public delegate Dictionary<string, string> EventArgsDeviceNames(string[] ports);
+
+        /// <summary>
+        /// Looks up the nice names of many ports at once. Called on a background thread.
+        /// </summary>
+        public static event EventArgsDeviceNames GetDeviceNames;
 
         private static string GetName(string port)
         {
