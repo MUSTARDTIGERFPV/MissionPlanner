@@ -5904,58 +5904,56 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
             req.target_component = compid;
             req.target_system = (byte)(sysid);
 
-            // use *all three* methods
-            doCommand(MAVLink.MAV_CMD.REQUEST_MESSAGE,
-                (float)MAVLink.MAVLINK_MSG_ID.AUTOPILOT_VERSION,
-                0, 0, 0, 0, 0, 0, false);
-
-	    // MAV_CMD.REQUEST_AUTOPILOT_CAPABILITIES is deprecated
-            doCommand(MAV_CMD.REQUEST_AUTOPILOT_CAPABILITIES, 0, 0, 0, 0, 0, 0, 0, false);
-
-	    // AUTOPILOT_VERSION_REQUEST is deprecated
-            generatePacket((byte) MAVLINK_MSG_ID.AUTOPILOT_VERSION_REQUEST, req, sysid, compid);
-
-            if (!responcerequired)
-                return true;
-
-            var responce = false;
-
-            var sub = SubscribeToPacketType(MAVLINK_MSG_ID.AUTOPILOT_VERSION, (buffer) =>
+            // listen before asking, a fast reply can arrive before the last request is written.
+            // completed from OnPacketReceived (not a packet subscription) as that runs after
+            // CurrentState has applied the version and capabilities our callers read next.
+            var responce = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            EventHandler<MAVLinkMessage> handler = (sender, buffer) =>
             {
                 if (buffer.msgid == (byte)MAVLINK_MSG_ID.AUTOPILOT_VERSION && buffer.sysid == sysid &&
                     buffer.compid == req.target_component)
-                {
-                    responce = true;
-                    return true;
-                }
-                return true;
-            }, sysid, (byte)compid);
+                    responce.TrySetResult(true);
+            };
 
-            DateTime start = DateTime.Now;
-            int retrys = 3;
+            if (responcerequired)
+                _OnPacketReceived += handler;
 
-            while (!responce)
+            try
             {
-                if (!(start.AddMilliseconds(500) > DateTime.Now))
+                // use *all three* methods
+                doCommand(MAVLink.MAV_CMD.REQUEST_MESSAGE,
+                    (float)MAVLink.MAVLINK_MSG_ID.AUTOPILOT_VERSION,
+                    0, 0, 0, 0, 0, 0, false);
+
+                // MAV_CMD.REQUEST_AUTOPILOT_CAPABILITIES is deprecated
+                doCommand(MAV_CMD.REQUEST_AUTOPILOT_CAPABILITIES, 0, 0, 0, 0, 0, 0, 0, false);
+
+                // AUTOPILOT_VERSION_REQUEST is deprecated
+                generatePacket((byte) MAVLINK_MSG_ID.AUTOPILOT_VERSION_REQUEST, req, sysid, compid);
+
+                if (!responcerequired)
+                    return true;
+
+                int retrys = 3;
+
+                while (true)
                 {
-                    if (retrys > 0)
-                    {
-                        log.Info("getVersion Retry " + retrys);
-                        generatePacket((byte)MAVLINK_MSG_ID.AUTOPILOT_VERSION_REQUEST, req, sysid, compid);
-                        start = DateTime.Now;
-                        retrys--;
-                        continue;
-                    }
+                    if (await Task.WhenAny(responce.Task, Task.Delay(500)).ConfigureAwait(false) == responce.Task)
+                        return true;
 
-                    break;
+                    if (retrys <= 0)
+                        return false;
+
+                    log.Info("getVersion Retry " + retrys);
+                    generatePacket((byte)MAVLINK_MSG_ID.AUTOPILOT_VERSION_REQUEST, req, sysid, compid);
+                    retrys--;
                 }
-
-                await Task.Delay((100));
             }
-
-            UnSubscribeToPacketType(sub);
-
-            return responce;
+            finally
+            {
+                if (responcerequired)
+                    _OnPacketReceived -= handler;
+            }
         }
 
         [Obsolete]

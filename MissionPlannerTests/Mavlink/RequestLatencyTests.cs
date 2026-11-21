@@ -57,6 +57,47 @@ namespace MissionPlannerTests.Mavlink
             }
         }
 
+        [TestMethod]
+        public void GetVersionSeesAnImmediateReplyAndCapabilitiesAreApplied()
+        {
+            using (var rig = new Rig())
+            {
+                const ulong caps = (ulong)(MAVLink.MAV_PROTOCOL_CAPABILITY.FTP | MAVLink.MAV_PROTOCOL_CAPABILITY.MISSION_INT);
+                int replies = 0;
+                rig.Serial.OnPacketWritten = msg =>
+                {
+                    // answer only the first of the three requests, before the others are even written
+                    if (msg.msgid != (uint)MAVLink.MAVLINK_MSG_ID.COMMAND_LONG || replies > 0)
+                        return;
+                    replies++;
+                    rig.Serial.Feed(Rig.Packet(MAVLink.MAVLINK_MSG_ID.AUTOPILOT_VERSION, new MAVLink.mavlink_autopilot_version_t
+                    {
+                        capabilities = caps,
+                        flight_sw_version = 0x04060000,
+                        uid2 = new byte[18],
+                        flight_custom_version = new byte[8],
+                        middleware_custom_version = new byte[8],
+                        os_custom_version = new byte[8],
+                    }));
+                    // let the reader consume it before the remaining requests are sent
+                    var until = DateTime.UtcNow.AddMilliseconds(500);
+                    while (rig.Serial.BytesToRead > 0 && DateTime.UtcNow < until)
+                        Thread.Sleep(1);
+                };
+                rig.StartReader();
+
+                var sw = Stopwatch.StartNew();
+                Assert.IsTrue(rig.Port.getVersion(VehicleSys, VehicleComp));
+                sw.Stop();
+
+                Assert.AreEqual(1, replies);
+                // callers read the capabilities straight after getVersion returns
+                Assert.AreEqual((uint)caps, rig.Port.MAVlist[VehicleSys, VehicleComp].cs.capabilities & (uint)caps);
+                // the old code subscribed after sending, missed this reply and needed the 500 ms retry
+                Assert.IsTrue(sw.ElapsedMilliseconds < 450, "took " + sw.ElapsedMilliseconds + " ms");
+            }
+        }
+
         sealed class Rig : IDisposable
         {
             public readonly MAVLinkInterface Port = new MAVLinkInterface();
