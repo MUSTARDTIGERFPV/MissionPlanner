@@ -1918,7 +1918,8 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                                 return MAVlist[sysid, compid].param;
                             }
 
-                        await Task.Delay(10).ConfigureAwait(false);
+                        // wakes as soon as the download finishes, the delay only paces the cancel check
+                        await Task.WhenAny(paramfileTask, Task.Delay(100)).ConfigureAwait(false);
                     }
 
                     if (frmProgressReporter != null)
