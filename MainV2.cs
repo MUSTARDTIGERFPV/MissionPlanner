@@ -2415,10 +2415,7 @@ namespace MissionPlanner
 
                                     //Console.WriteLine("Joystick btw " + comPort.BaseStream.BytesToWrite);
 
-                                    if (!comPort.BaseStream.IsOpen)
-                                        continue;
-
-                                    if (comPort.BaseStream.BytesToWrite < 50)
+                                    if (comPort.BaseStream.IsOpen && comPort.BaseStream.BytesToWrite < 50)
                                     {
                                         if (sitl)
                                         {
@@ -2451,10 +2448,7 @@ namespace MissionPlanner
 
                                 if (lastjoystick.AddMilliseconds(rate) < DateTime.Now)
                                 {
-                                    if (!comPort.BaseStream.IsOpen)
-                                        continue;
-
-                                    if (comPort.BaseStream.BytesToWrite < 50)
+                                    if (comPort.BaseStream.IsOpen && comPort.BaseStream.BytesToWrite < 50)
                                     {
                                         if (sitl)
                                         {
@@ -2472,12 +2466,13 @@ namespace MissionPlanner
                             }
                         }
                     }
-
-                    await Task.Delay(40).ConfigureAwait(false);
                 }
                 catch
                 {
                 } // cant fall out
+
+                // outside the try, so an exception cannot skip it and spin a core
+                await Task.Delay(40).ConfigureAwait(false);
             }
 
             joysendThreadExited = true; //so we know this thread exited.
