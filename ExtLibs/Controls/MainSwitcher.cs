@@ -133,8 +133,6 @@ namespace MissionPlanner.Controls
                     current.Control.Dispose();
 
                     current.Control = null;
-
-                    GC.Collect();
                 }
             }
 
