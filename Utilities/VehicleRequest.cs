@@ -38,7 +38,8 @@ namespace MissionPlanner.Utilities
     /// sees keys first.
     ///
     /// Call it from the UI thread, and only touch controls before and after the await: the request
-    /// itself runs on the thread pool. Prompts belong outside it, where the user can answer them.
+    /// itself runs on the thread pool. Called from another thread, it only runs the request on the
+    /// thread pool, after any request before it. Prompts belong outside it, where the user can answer them.
     /// Exceptions thrown by the request are rethrown to the caller once input is restored.
     /// </remarks>
     public static class VehicleRequest
@@ -52,6 +53,21 @@ namespace MissionPlanner.Utilities
 
         public static async Task<T> RunAsync<T>(Func<T> request)
         {
+            // off the UI thread there is no input to hold back and nothing to keep painting: just
+            // run it, still one at a time
+            if (!(SynchronizationContext.Current is WindowsFormsSynchronizationContext))
+            {
+                await gate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    return await Task.Run(request).ConfigureAwait(false);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }
+
             Begin();
             try
             {
