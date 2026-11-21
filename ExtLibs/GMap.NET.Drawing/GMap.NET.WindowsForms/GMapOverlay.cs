@@ -285,6 +285,9 @@ namespace GMap.NET.WindowsForms
             }
         }
 
+        // pixels beyond the control edges a culled marker's area may reach and still be drawn
+        const int MarkerCullMargin = 128;
+
         /// <summary>
         /// renders objects/routes/polygons
         /// </summary>
@@ -335,12 +338,30 @@ namespace GMap.NET.WindowsForms
 
                 if (Control.MarkersEnabled)
                 {
+                    // skip markers that are clearly off screen. Only the GMarkerGoogle family
+                    // (which includes the waypoint markers) is culled: it draws its bitmap
+                    // inside LocalArea, while other markers (vehicle heading lines, radius
+                    // circles, overlay images) draw far outside their Size. Not on a rotated map.
+                    var cull = !Control.Core.IsRotated && Control.Bearing == 0;
+                    // local coordinates are drawn translated by renderOffset
+                    var view = new Rectangle((int) -Control.Core.renderOffset.X, (int) -Control.Core.renderOffset.Y,
+                        Control.Width, Control.Height);
+                    view.Inflate(MarkerCullMargin, MarkerCullMargin);
+
                     // markers
                     foreach (GMapMarker m in Markers.ToArray())
                     {
                         //if(m.IsVisible && (m.DisableRegionCheck || Control.Core.currentRegion.Contains(m.LocalPosition.X, m.LocalPosition.Y)))
                         if (m.IsVisible || m.DisableRegionCheck)
                         {
+                            if (cull && !m.DisableRegionCheck && m is GMap.NET.WindowsForms.Markers.GMarkerGoogle)
+                            {
+                                var area = m.LocalArea;
+                                if (area.Right < view.Left || area.Left > view.Right ||
+                                    area.Bottom < view.Top || area.Top > view.Bottom)
+                                    continue;
+                            }
+
                             m.OnRender(g);
                         }
                     }
