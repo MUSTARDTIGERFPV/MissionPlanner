@@ -819,7 +819,24 @@ namespace MissionPlanner.GCSViews
             return result;
         }
 
-        public void GeoFencedownloadToolStripMenuItem_Click(object sender, EventArgs e)
+        public async void GeoFencedownloadToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                await DownloadGeoFenceAsync();
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex);
+                CustomMessageBox.Show("Failed to get fence point", Strings.ERROR);
+            }
+        }
+
+        /// <summary>
+        /// Gets the fence from the vehicle and shows it. The requests wait off the UI thread, with user
+        /// input ignored until they are done (see <see cref="VehicleRequest"/>).
+        /// </summary>
+        internal async Task DownloadGeoFenceAsync()
         {
             polygongridmode = false;
             int count = 1;
@@ -834,8 +851,11 @@ namespace MissionPlanner.GCSViews
 
                 try
                 {
-                    mav_mission.download(MainV2.comPort, MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid,
-                        MAVLink.MAV_MISSION_TYPE.FENCE).AwaitSync();
+                    var port = MainV2.comPort;
+                    var sysid = port.MAV.sysid;
+                    var compid = port.MAV.compid;
+                    await VehicleRequest.RunAsync(() => mav_mission.download(port, sysid, compid,
+                        MAVLink.MAV_MISSION_TYPE.FENCE).AwaitSync());
                 }
                 catch
                 {
@@ -861,19 +881,32 @@ namespace MissionPlanner.GCSViews
             geofenceoverlay.Markers.Clear();
             geofencepolygon.Points.Clear();
 
-            for (int a = 0; a < count; a++)
+            var fenceport = MainV2.comPort;
+            var points = new List<PointLatLng>();
+            var failed = await VehicleRequest.RunAsync(() =>
             {
-                try
+                for (int a = 0; a < count; a++)
                 {
-                    var plla = MainV2.comPort.getFencePoint(a).AwaitSync();
-                    count = plla.total;
-                    geofencepolygon.Points.Add(new PointLatLng(plla.plla.Lat, plla.plla.Lng));
+                    try
+                    {
+                        var plla = fenceport.getFencePoint(a).AwaitSync();
+                        count = plla.total;
+                        points.Add(new PointLatLng(plla.plla.Lat, plla.plla.Lng));
+                    }
+                    catch
+                    {
+                        return true;
+                    }
                 }
-                catch
-                {
-                    CustomMessageBox.Show("Failed to get fence point", Strings.ERROR);
-                    return;
-                }
+
+                return false;
+            });
+
+            geofencepolygon.Points.AddRange(points);
+            if (failed)
+            {
+                CustomMessageBox.Show("Failed to get fence point", Strings.ERROR);
+                return;
             }
 
             // do return location
@@ -910,7 +943,24 @@ namespace MissionPlanner.GCSViews
             MainMap.Invalidate();
         }
 
-        public void getRallyPointsToolStripMenuItem_Click(object sender, EventArgs e)
+        public async void getRallyPointsToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                await GetRallyPointsAsync();
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex);
+                CustomMessageBox.Show("Failed to get rally point", Strings.ERROR);
+            }
+        }
+
+        /// <summary>
+        /// Gets the rally points from the vehicle and shows them. The requests wait off the UI thread, with
+        /// user input ignored until they are done (see <see cref="VehicleRequest"/>).
+        /// </summary>
+        internal async Task GetRallyPointsAsync()
         {
             if ((MainV2.comPort.MAV.cs.capabilities & (uint) MAVLink.MAV_PROTOCOL_CAPABILITY.MISSION_RALLY) >= 0)
             {
@@ -920,8 +970,11 @@ namespace MissionPlanner.GCSViews
                     return;
                 }
 
-                mav_mission.download(MainV2.comPort, MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid,
-                    MAVLink.MAV_MISSION_TYPE.RALLY).AwaitSync();
+                var port = MainV2.comPort;
+                var sysid = port.MAV.sysid;
+                var compid = port.MAV.compid;
+                await VehicleRequest.RunAsync(() => mav_mission.download(port, sysid, compid,
+                    MAVLink.MAV_MISSION_TYPE.RALLY).AwaitSync());
                 return;
             }
 
@@ -941,24 +994,41 @@ namespace MissionPlanner.GCSViews
 
             int count = int.Parse(MainV2.comPort.MAV.param["RALLY_TOTAL"].ToString());
 
-            for (int a = 0; a < (count); a++)
+            var rallyport = MainV2.comPort;
+            var points = new List<PointLatLngAlt>();
+            var failed = await VehicleRequest.RunAsync(() =>
             {
-                try
+                for (int a = 0; a < (count); a++)
                 {
-                    var plla = MainV2.comPort.getRallyPoint(a).AwaitSync();
-                    count = plla.total;
-                    rallypointoverlay.Markers.Add(new GMapMarkerRallyPt(new PointLatLng(plla.plla.Lat, plla.plla.Lng))
+                    try
                     {
-                        Alt = (int) plla.plla.Alt,
-                        ToolTipMode = MarkerTooltipMode.OnMouseOver,
-                        ToolTipText = "Rally Point" + "\nAlt: " + (plla.plla.Alt * CurrentState.multiplieralt)
-                    });
+                        var plla = rallyport.getRallyPoint(a).AwaitSync();
+                        count = plla.total;
+                        points.Add(plla.plla);
+                    }
+                    catch
+                    {
+                        return true;
+                    }
                 }
-                catch
+
+                return false;
+            });
+
+            foreach (var plla in points)
+            {
+                rallypointoverlay.Markers.Add(new GMapMarkerRallyPt(new PointLatLng(plla.Lat, plla.Lng))
                 {
-                    CustomMessageBox.Show("Failed to get rally point", Strings.ERROR);
-                    return;
-                }
+                    Alt = (int) plla.Alt,
+                    ToolTipMode = MarkerTooltipMode.OnMouseOver,
+                    ToolTipText = "Rally Point" + "\nAlt: " + (plla.Alt * CurrentState.multiplieralt)
+                });
+            }
+
+            if (failed)
+            {
+                CustomMessageBox.Show("Failed to get rally point", Strings.ERROR);
+                return;
             }
 
             MainMap.UpdateMarkerLocalPosition(rallypointoverlay.Markers[0]);

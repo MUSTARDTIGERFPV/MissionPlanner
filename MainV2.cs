@@ -1767,63 +1767,8 @@ namespace MissionPlanner
                         }
                     }
 
-                    // get any rallypoints
-                    // The vehicle picks both the value and the reported type of any parameter,
-                    // so this string can be "3.5", "NaN" or "1E+30". int.Parse() throws on those,
-                    // and this runs in the if condition, before the try below and before showui.
-                    if (MainV2.comPort.MAV.param.ContainsKey("RALLY_TOTAL") &&
-                        int.TryParse(MainV2.comPort.MAV.param["RALLY_TOTAL"].ToString(), out var rallyTotal) &&
-                        rallyTotal > 0 && showui)
-                    {
-                        try
-                        {
-                            FlightPlanner.getRallyPointsToolStripMenuItem_Click(null, null);
-
-                            double maxdist = 0;
-
-                            foreach (var rally in comPort.MAV.rallypoints)
-                            {
-                                foreach (var rally1 in comPort.MAV.rallypoints)
-                                {
-                                    var pnt1 = new PointLatLngAlt(rally.Value.y / 10000000.0f, rally.Value.x / 10000000.0f);
-                                    var pnt2 = new PointLatLngAlt(rally1.Value.y / 10000000.0f,
-                                        rally1.Value.x / 10000000.0f);
-
-                                    var dist = pnt1.GetDistance(pnt2);
-
-                                    maxdist = Math.Max(maxdist, dist);
-                                }
-                            }
-
-                            if (comPort.MAV.param.ContainsKey("RALLY_LIMIT_KM") &&
-                                (maxdist / 1000.0) > (float)comPort.MAV.param["RALLY_LIMIT_KM"])
-                            {
-                                CustomMessageBox.Show(Strings.Warningrallypointdistance + " " +
-                                                      (maxdist / 1000.0).ToString("0.00") + " > " +
-                                                      (float)comPort.MAV.param["RALLY_LIMIT_KM"]);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            log.Warn(ex);
-                        }
-                    }
-
-                    // get any fences
-                    if (MainV2.comPort.MAV.param.ContainsKey("FENCE_TOTAL") &&
-                        int.TryParse(MainV2.comPort.MAV.param["FENCE_TOTAL"].ToString(), out var fenceTotal) &&
-                        fenceTotal > 1 &&
-                        MainV2.comPort.MAV.param.ContainsKey("FENCE_ACTION") && showui)
-                    {
-                        try
-                        {
-                            FlightPlanner.GeoFencedownloadToolStripMenuItem_Click(null, null);
-                        }
-                        catch (Exception ex)
-                        {
-                            log.Warn(ex);
-                        }
-                    }
+                    // get any rallypoints and fences; the downloads wait off the UI thread
+                    GetRallyPointsAndFence(comPort, showui);
 
                     //Add HUD custom items source
                     HUD.Custom.src = MainV2.comPort.MAV.cs;
@@ -1851,6 +1796,72 @@ namespace MissionPlanner
             }
         }
 
+
+        /// <summary>
+        /// Gets the rally points and fence after a connect, on the UI thread. The downloads wait for the
+        /// vehicle off it, with user input ignored until they are done (see <see cref="VehicleRequest"/>),
+        /// so the window keeps painting instead of freezing for seconds after the connect.
+        /// </summary>
+        private async void GetRallyPointsAndFence(MAVLinkInterface comPort, bool showui)
+        {
+            // get any rallypoints
+            // The vehicle picks both the value and the reported type of any parameter,
+            // so this string can be "3.5", "NaN" or "1E+30". int.Parse() throws on those,
+            // and this runs in the if condition, before the try below and before showui.
+            if (MainV2.comPort.MAV.param.ContainsKey("RALLY_TOTAL") &&
+                int.TryParse(MainV2.comPort.MAV.param["RALLY_TOTAL"].ToString(), out var rallyTotal) &&
+                rallyTotal > 0 && showui)
+            {
+                try
+                {
+                    await FlightPlanner.GetRallyPointsAsync();
+
+                    double maxdist = 0;
+
+                    foreach (var rally in comPort.MAV.rallypoints)
+                    {
+                        foreach (var rally1 in comPort.MAV.rallypoints)
+                        {
+                            var pnt1 = new PointLatLngAlt(rally.Value.y / 10000000.0f, rally.Value.x / 10000000.0f);
+                            var pnt2 = new PointLatLngAlt(rally1.Value.y / 10000000.0f,
+                                rally1.Value.x / 10000000.0f);
+
+                            var dist = pnt1.GetDistance(pnt2);
+
+                            maxdist = Math.Max(maxdist, dist);
+                        }
+                    }
+
+                    if (comPort.MAV.param.ContainsKey("RALLY_LIMIT_KM") &&
+                        (maxdist / 1000.0) > (float)comPort.MAV.param["RALLY_LIMIT_KM"])
+                    {
+                        CustomMessageBox.Show(Strings.Warningrallypointdistance + " " +
+                                              (maxdist / 1000.0).ToString("0.00") + " > " +
+                                              (float)comPort.MAV.param["RALLY_LIMIT_KM"]);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log.Warn(ex);
+                }
+            }
+
+            // get any fences
+            if (MainV2.comPort.MAV.param.ContainsKey("FENCE_TOTAL") &&
+                int.TryParse(MainV2.comPort.MAV.param["FENCE_TOTAL"].ToString(), out var fenceTotal) &&
+                fenceTotal > 1 &&
+                MainV2.comPort.MAV.param.ContainsKey("FENCE_ACTION") && showui)
+            {
+                try
+                {
+                    await FlightPlanner.DownloadGeoFenceAsync();
+                }
+                catch (Exception ex)
+                {
+                    log.Warn(ex);
+                }
+            }
+        }
 
         private void MenuConnect_Click(object sender, EventArgs e)
         {
