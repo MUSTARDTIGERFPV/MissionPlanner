@@ -540,6 +540,27 @@ namespace MissionPlanner
                 }
             }
 
+            // Win32_SerialPort leaves out some drivers' ports (e.g. WCH CH34x). Plug and Play names those
+            // in the same "Description (COMn)" form, so ask it only about the ports still missing
+            if (ports.Any(p => p.StartsWith("COM", StringComparison.OrdinalIgnoreCase) && !names.ContainsKey(p)))
+            {
+                ObjectQuery pnpquery = new ObjectQuery("SELECT Name FROM Win32_PnPEntity WHERE Name LIKE '%(COM%'");
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(pnpquery))
+                using (ManagementObjectCollection results = searcher.Get())
+                {
+                    foreach (ManagementObject obj2 in results)
+                    {
+                        using (obj2)
+                        {
+                            var name = obj2["Name"]?.ToString();
+                            var match = Regex.Match(name ?? "", @"\((COM\d+)\)\s*$", RegexOptions.IgnoreCase);
+                            if (match.Success && !names.ContainsKey(match.Groups[1].Value))
+                                names[match.Groups[1].Value] = name;
+                        }
+                    }
+                }
+            }
+
             return names;
         }
 
