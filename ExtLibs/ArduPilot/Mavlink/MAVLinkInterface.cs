@@ -3456,149 +3456,155 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
             // claim the port before the request goes out, or the SerialReader thread can
             // read the reply first and this method only sees it again after a 2.5 s retry
             giveComport = true;
-
-            if (use_int)
+            // released however this ends: a write that throws (USB unplugged, UDP send error)
+            // must not leave the port claimed, or the SerialReader stops reading it
+            try
             {
-                mavlink_mission_request_int_t reqi = new mavlink_mission_request_int_t
+                if (use_int)
                 {
-                    target_system = (byte)(sysid),
-                    target_component = compid,
-                    mission_type = (byte) type,
-                    seq = index
-                };
-
-                // request
-                generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST_INT, reqi, sysid, compid);
-
-                req = reqi;
-            }
-            else
-            {
-                mavlink_mission_request_t reqf = new mavlink_mission_request_t
-                {
-                    target_system = (byte)(sysid),
-                    target_component = compid,
-                    mission_type = (byte) type,
-                    seq = index
-                };
-
-                // request
-                generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST, reqf, sysid, compid);
-
-                req = reqf;
-            }
-
-            Locationwp loc = new Locationwp();
-
-            DateTime start = DateTime.Now;
-            int retrys = 5;
-
-            while (true)
-            {
-                if (!(start.AddMilliseconds(2500) > DateTime.Now)) // apm times out after 5000ms
-                {
-                    if (retrys > 0)
+                    mavlink_mission_request_int_t reqi = new mavlink_mission_request_int_t
                     {
-                        log.Info("getWP Retry " + retrys);
-                        if (use_int)
-                            generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST_INT, req, sysid, compid);
+                        target_system = (byte)(sysid),
+                        target_component = compid,
+                        mission_type = (byte) type,
+                        seq = index
+                    };
+
+                    // request
+                    generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST_INT, reqi, sysid, compid);
+
+                    req = reqi;
+                }
+                else
+                {
+                    mavlink_mission_request_t reqf = new mavlink_mission_request_t
+                    {
+                        target_system = (byte)(sysid),
+                        target_component = compid,
+                        mission_type = (byte) type,
+                        seq = index
+                    };
+
+                    // request
+                    generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST, reqf, sysid, compid);
+
+                    req = reqf;
+                }
+
+                Locationwp loc = new Locationwp();
+
+                DateTime start = DateTime.Now;
+                int retrys = 5;
+
+                while (true)
+                {
+                    if (!(start.AddMilliseconds(2500) > DateTime.Now)) // apm times out after 5000ms
+                    {
+                        if (retrys > 0)
+                        {
+                            log.Info("getWP Retry " + retrys);
+                            if (use_int)
+                                generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST_INT, req, sysid, compid);
+                            else
+                                generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST, req, sysid, compid);
+                            start = DateTime.Now;
+                            retrys--;
+                            continue;
+                        }
+
+                        throw new TimeoutException("Timeout on read - getWP");
+                    }
+
+                    //Console.WriteLine("getwp read " + DateTime.Now.Millisecond);
+                    MAVLinkMessage buffer = await readPacketAsync().ConfigureAwait(false);
+                    //Console.WriteLine("getwp readend " + DateTime.Now.Millisecond);
+                    if (buffer.Length > 5)
+                    {
+                        if (buffer.msgid == (byte) MAVLINK_MSG_ID.MISSION_ITEM && buffer.sysid == sysid &&
+                            buffer.compid == compid)
+                        {
+                            //Console.WriteLine("getwp ans " + DateTime.Now.Millisecond);
+
+                            var wp = buffer.ToStructure<mavlink_mission_item_t>();
+                            if (!buffer.IsTargetedTo(gcssysid, (byte)MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER))
+                                continue;
+
+                            // received a packet, but not what we requested
+                            if (index != wp.seq)
+                            {
+                                generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST, req, sysid, compid);
+                                continue;
+                            }
+
+                            loc.frame = wp.frame;
+                            loc.id = (ushort) (wp.command);
+                            loc.p1 = (wp.param1);
+                            loc.p2 = (wp.param2);
+                            loc.p3 = (wp.param3);
+                            loc.p4 = (wp.param4);
+
+                            loc.alt = ((wp.z));
+                            loc.lat = ((wp.x));
+                            loc.lng = ((wp.y));
+
+                            log.InfoFormat("getWP {0} {1} {2} {3} {4} opt {5}", loc.id, loc.p1, loc.alt, loc.lat, loc.lng,
+                                loc.frame);
+
+                            break;
+                        }
+                        else if (buffer.msgid == (byte) MAVLINK_MSG_ID.MISSION_ITEM_INT && buffer.sysid == sysid &&
+                                 buffer.compid == compid)
+                        {
+                            //Console.WriteLine("getwp ans " + DateTime.Now.Millisecond);
+
+                            var wp = buffer.ToStructure<mavlink_mission_item_int_t>();
+                            // check this gcs sent it
+                            if (!buffer.IsTargetedTo(gcssysid, (byte)MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER))
+                                continue;
+
+                            // received a packet, but not what we requested
+                            if (index != wp.seq)
+                            {
+                                generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST_INT, req, sysid, compid);
+                                continue;
+                            }
+
+                            loc.frame = wp.frame;
+                            loc.id = (ushort) (wp.command);
+                            loc.p1 = (wp.param1);
+                            loc.p2 = (wp.param2);
+                            loc.p3 = (wp.param3);
+                            loc.p4 = (wp.param4);
+
+                            loc.alt = ((wp.z));
+                            loc.lat = ((wp.x / 1.0e7));
+                            loc.lng = ((wp.y / 1.0e7));
+
+                            if (!Locationwp.isLocationCommand(loc.id))
+                            {
+                                loc.lat = wp.x;
+                                loc.lng = wp.y;
+                            }
+
+                            log.InfoFormat("getWPint {0} {1} {2} {3} {4} opt {5}", loc.id, loc.p1, loc.alt, loc.lat,
+                                loc.lng,
+                                loc.frame);
+
+                            break;
+                        }
                         else
-                            generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST, req, sysid, compid);
-                        start = DateTime.Now;
-                        retrys--;
-                        continue;
+                        {
+                            //log.Info(DateTime.Now + " PC getwp " + buffer.msgid);
+                        }
                     }
-
-                    giveComport = false;
-                    throw new TimeoutException("Timeout on read - getWP");
                 }
 
-                //Console.WriteLine("getwp read " + DateTime.Now.Millisecond);
-                MAVLinkMessage buffer = await readPacketAsync().ConfigureAwait(false);
-                //Console.WriteLine("getwp readend " + DateTime.Now.Millisecond);
-                if (buffer.Length > 5)
-                {
-                    if (buffer.msgid == (byte) MAVLINK_MSG_ID.MISSION_ITEM && buffer.sysid == sysid &&
-                        buffer.compid == compid)
-                    {
-                        //Console.WriteLine("getwp ans " + DateTime.Now.Millisecond);
-
-                        var wp = buffer.ToStructure<mavlink_mission_item_t>();
-                        if (!buffer.IsTargetedTo(gcssysid, (byte)MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER))
-                            continue;
-
-                        // received a packet, but not what we requested
-                        if (index != wp.seq)
-                        {
-                            generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST, req, sysid, compid);
-                            continue;
-                        }
-
-                        loc.frame = wp.frame;
-                        loc.id = (ushort) (wp.command);
-                        loc.p1 = (wp.param1);
-                        loc.p2 = (wp.param2);
-                        loc.p3 = (wp.param3);
-                        loc.p4 = (wp.param4);
-
-                        loc.alt = ((wp.z));
-                        loc.lat = ((wp.x));
-                        loc.lng = ((wp.y));
-
-                        log.InfoFormat("getWP {0} {1} {2} {3} {4} opt {5}", loc.id, loc.p1, loc.alt, loc.lat, loc.lng,
-                            loc.frame);
-
-                        break;
-                    }
-                    else if (buffer.msgid == (byte) MAVLINK_MSG_ID.MISSION_ITEM_INT && buffer.sysid == sysid &&
-                             buffer.compid == compid)
-                    {
-                        //Console.WriteLine("getwp ans " + DateTime.Now.Millisecond);
-
-                        var wp = buffer.ToStructure<mavlink_mission_item_int_t>();
-                        // check this gcs sent it
-                        if (!buffer.IsTargetedTo(gcssysid, (byte)MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER))
-                            continue;
-
-                        // received a packet, but not what we requested
-                        if (index != wp.seq)
-                        {
-                            generatePacket((byte) MAVLINK_MSG_ID.MISSION_REQUEST_INT, req, sysid, compid);
-                            continue;
-                        }
-
-                        loc.frame = wp.frame;
-                        loc.id = (ushort) (wp.command);
-                        loc.p1 = (wp.param1);
-                        loc.p2 = (wp.param2);
-                        loc.p3 = (wp.param3);
-                        loc.p4 = (wp.param4);
-
-                        loc.alt = ((wp.z));
-                        loc.lat = ((wp.x / 1.0e7));
-                        loc.lng = ((wp.y / 1.0e7));
-
-                        if (!Locationwp.isLocationCommand(loc.id))
-                        {
-                            loc.lat = wp.x;
-                            loc.lng = wp.y;
-                        }
-
-                        log.InfoFormat("getWPint {0} {1} {2} {3} {4} opt {5}", loc.id, loc.p1, loc.alt, loc.lat,
-                            loc.lng,
-                            loc.frame);
-
-                        break;
-                    }
-                    else
-                    {
-                        //log.Info(DateTime.Now + " PC getwp " + buffer.msgid);
-                    }
-                }
+                return loc;
             }
-
-            giveComport = false;
-            return loc;
+            finally
+            {
+                giveComport = false;
+            }
         }
 
         public object DebugPacket(MAVLinkMessage datin)

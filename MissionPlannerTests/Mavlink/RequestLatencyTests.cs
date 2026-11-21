@@ -58,6 +58,31 @@ namespace MissionPlannerTests.Mavlink
         }
 
         [TestMethod]
+        public void GetWPReleasesThePortWhenTheRequestCannotBeWritten()
+        {
+            using (var rig = new Rig())
+            {
+                // USB unplugged / UDP send error: the write throws after giveComport was claimed
+                rig.Serial.FailWrites = true;
+
+                bool threw = false;
+                try
+                {
+                    rig.Port.getWP(VehicleSys, VehicleComp, 3);
+                }
+                catch (Exception)
+                {
+                    threw = true;
+                }
+
+                Assert.IsTrue(threw, "the write error should reach the caller");
+
+                // a port left claimed stops the SerialReader reading it for good
+                Assert.IsFalse(rig.Port.giveComport);
+            }
+        }
+
+        [TestMethod]
         public void GetVersionSeesAnImmediateReplyAndCapabilitiesAreApplied()
         {
             using (var rig = new Rig())
@@ -163,6 +188,8 @@ namespace MissionPlannerTests.Mavlink
             readonly MemoryStream written = new MemoryStream();
             /// <summary>called with each packet the GCS writes, inside the write</summary>
             public Action<MAVLink.MAVLinkMessage> OnPacketWritten;
+            /// <summary>makes every write throw, like a link that went away</summary>
+            public bool FailWrites;
 
             public void Feed(byte[] bytes) { lock (incoming) foreach (byte b in bytes) incoming.Enqueue(b); }
             public Stream BaseStream { get { return written; } }
@@ -197,6 +224,8 @@ namespace MissionPlannerTests.Mavlink
             public void Write(string text) { var bytes = Encoding.ASCII.GetBytes(text); Write(bytes, 0, bytes.Length); }
             public void Write(byte[] buffer, int offset, int count)
             {
+                if (FailWrites)
+                    throw new IOException("link gone");
                 var packet = new byte[count];
                 Array.Copy(buffer, offset, packet, 0, count);
                 lock (written) written.Write(packet, 0, count);
