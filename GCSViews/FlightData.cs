@@ -3124,6 +3124,28 @@ namespace MissionPlanner.GCSViews
         void gMapControl1_OnMarkerEnter(GMapMarker item)
         {
             CurrentGMapMarker = item;
+
+            // the map update only keeps this current while the mouse is over the plane
+            if (item is GMapMarkerADSBPlane && item.Tag is adsb.PointLatLngAltHdg)
+                item.ToolTipText = getADSBToolTip((adsb.PointLatLngAltHdg) item.Tag);
+        }
+
+        static string getADSBToolTip(adsb.PointLatLngAltHdg pllau)
+        {
+            var tooltip = "ICAO: " + pllau.Tag + "\n" +
+                          "Callsign: " + pllau.CallSign + "\n" +
+                          "Squawk: " + pllau.Squawk.ToString("X4") + "\n" +
+                          "Alt: " + (pllau.Alt * CurrentState.multiplieralt).ToString("0") + " " + CurrentState.AltUnit + "\n" +
+                          "Speed: " + (pllau.Speed / 100 /* cm to m */ * CurrentState.multiplierspeed).ToString("0") + " " + CurrentState.SpeedUnit + "\n" +
+                          "VSpeed: " + (pllau.VerticalSpeed / 100 /* cm to m */ * CurrentState.multiplierspeed).ToString("F1") + " " + CurrentState.SpeedUnit + "\n" +
+                          "Heading: " + pllau.Heading.ToString("0") + "°";
+            // Add distance
+            if (MainV2.comPort.MAV.cs.Location.Lat != 0 && MainV2.comPort.MAV.cs.Location.Lng != 0)
+                tooltip += "\n" + "Distance: " + (pllau.GetDistance(MainV2.comPort.MAV.cs.Location) * CurrentState.multiplierdist).ToString("0") + " " + CurrentState.DistanceUnit;
+            // Add collision threat level
+            if (pllau.ThreatLevel != MAVLink.MAV_COLLISION_THREAT_LEVEL.NONE)
+                tooltip += "\n" + "Collision risk: " + (pllau.ThreatLevel == MAVLink.MAV_COLLISION_THREAT_LEVEL.LOW ? "Warning" : "Danger");
+            return tooltip;
         }
 
         void gMapControl1_OnMarkerLeave(GMapMarker item)
@@ -4304,118 +4326,101 @@ namespace MissionPlanner.GCSViews
                                 marker.Tag = item;
                             });
 
+                        // take a copy of the planes and release adsblock straight away: the MAVLink
+                        // reader needs it to update planes, and marking up every plane is not quick
+                        adsb.PointLatLngAltHdg[] planes;
                         lock (MainV2.instance.adsblock)
                         {
-                            // draw OA_DB
-                            var oadbtags = new HashSet<string>();
-                            foreach (adsb.PointLatLngAltHdg plla in MainV2.instance.adsbPlanes.Values)
+                            planes = MainV2.instance.adsbPlanes.Values.ToArray();
+                        }
+
+                        // split off OA_DB items (the autopilot's object avoidance database), drawn as distances
+                        var adsbitems = new List<adsb.PointLatLngAltHdg>(planes.Length);
+                        var oadbtags = new HashSet<string>();
+                        foreach (adsb.PointLatLngAltHdg plla in planes)
+                        {
+                            if (plla.Raw != null)
                             {
-                                if (plla.Raw != null)
+                                var msg = ((MAVLink.mavlink_adsb_vehicle_t) plla.Raw);
+                                if (msg.emitter_type == 255 &&
+                                    Encoding.ASCII.GetString(msg.callsign).Trim('\0') == "OA_DB")
                                 {
-                                    var msg = ((MAVLink.mavlink_adsb_vehicle_t) plla.Raw);
-                                    if (msg.emitter_type == 255 &&
-                                        Encoding.ASCII.GetString(msg.callsign).Trim('\0') == "OA_DB")
+                                    // cm
+                                    var radius = msg.squawk;
+
+                                    oadbtags.Add(plla.Tag);
+                                    if (((DateTime) plla.Time) > DateTime.Now.AddSeconds(-10))
                                     {
-                                        // cm
-                                        var radius = msg.squawk;
-
-                                        oadbtags.Add(plla.Tag);
-                                        if (((DateTime) plla.Time) > DateTime.Now.AddSeconds(-10))
+                                        GMapMarkerDistance oadb;
+                                        if (!oadbMarkers.TryGetValue(plla.Tag, out oadb))
                                         {
-                                            GMapMarkerDistance oadb;
-                                            if (!oadbMarkers.TryGetValue(plla.Tag, out oadb))
-                                            {
-                                                oadb = new GMapMarkerDistance(plla, radius / 100.0, 0) {Pen = oadbPen};
-                                                oadbMarkers[plla.Tag] = oadb;
-                                            }
-
-                                            oadb.wprad = radius / 100.0;
-                                            updateMissionRouteMarker(oadb, plla, null);
+                                            oadb = new GMapMarkerDistance(plla, radius / 100.0, 0) {Pen = oadbPen};
+                                            oadbMarkers[plla.Tag] = oadb;
                                         }
-                                        continue;
+
+                                        oadb.wprad = radius / 100.0;
+                                        updateMissionRouteMarker(oadb, plla, null);
                                     }
+                                    continue;
                                 }
                             }
 
-                            // forget OA_DB items that are gone; their markers go with the periodic routes clear
-                            foreach (var tag in oadbMarkers.Keys.Where(a => !oadbtags.Contains(a)).ToArray())
-                                oadbMarkers.Remove(tag);
+                            adsbitems.Add(plla);
+                        }
 
-                            // filter out OA_DB adsb
-                            var adsbitems = MainV2.instance.adsbPlanes.Values.Where(a =>
+                        // forget OA_DB items that are gone; their markers go with the periodic routes clear
+                        foreach (var tag in oadbMarkers.Keys.Where(a => !oadbtags.Contains(a)).ToArray())
+                            oadbMarkers.Remove(tag);
+
+                        //draw ADSB
+                        updateMarkersAsNeeded<adsb.PointLatLngAltHdg, GMapMarkerADSBPlane>(adsbitems, adsbais,
+                            (plla) => { return plla.Tag; },
+                            (marker) => { return ((adsb.PointLatLngAltHdg) marker?.Tag)?.Tag; },
+                            (pllac) =>
                             {
-                                if (a.Raw != null)
+                                return new GMapMarkerADSBPlane(pllac, pllac.Heading)
                                 {
-                                    var msg = ((MAVLink.mavlink_adsb_vehicle_t) a.Raw);
-                                    if (msg.emitter_type == 255 &&
-                                        Encoding.ASCII.GetString(msg.callsign).Trim('\0') == "OA_DB")
+                                    Tag = pllac
+                                };
+                            },
+                            (pllau, marker) =>
+                            {
+                                var adsbplane = marker as GMapMarkerADSBPlane;
+
+                                if (adsbplane == null || pllau == null)
+                                    return;
+
+                                // the tooltip is only seen on mouse over, so it is only kept current for the
+                                // plane under the mouse; gMapControl1_OnMarkerEnter refreshes it on entry
+                                if (adsbplane.ToolTipText == null || adsbplane.IsMouseOver)
+                                    adsbplane.ToolTipText = getADSBToolTip(pllau);
+                                adsbplane.ToolTipMode = MarkerTooltipMode.OnMouseOver;
+                                adsbplane.Position = pllau;
+                                adsbplane.heading = pllau.Heading;
+                                adsbplane.Tag = pllau;
+
+                                if (((DateTime) pllau.Time) > DateTime.Now.AddSeconds(-30))
+                                {
+                                    adsbplane.IsVisible = true;
+
+                                    switch (pllau.ThreatLevel)
                                     {
-                                        return false;
+                                        case MAVLink.MAV_COLLISION_THREAT_LEVEL.NONE:
+                                            adsbplane.AlertLevel = GMapMarkerADSBPlane.AlertLevelOptions.Orange;
+                                            break;
+                                        case MAVLink.MAV_COLLISION_THREAT_LEVEL.LOW:
+                                            adsbplane.AlertLevel = GMapMarkerADSBPlane.AlertLevelOptions.Orange;
+                                            break;
+                                        case MAVLink.MAV_COLLISION_THREAT_LEVEL.HIGH:
+                                            adsbplane.AlertLevel = GMapMarkerADSBPlane.AlertLevelOptions.Red;
+                                            break;
                                     }
                                 }
-
-                                return true;
+                                else
+                                {
+                                    adsbplane.IsVisible = false;
+                                }
                             });
-
-                            //draw ADSB
-                            updateMarkersAsNeeded<adsb.PointLatLngAltHdg, GMapMarkerADSBPlane>(adsbitems, adsbais,
-                                (plla) => { return plla.Tag; },
-                                (marker) => { return ((adsb.PointLatLngAltHdg) marker?.Tag)?.Tag; },
-                                (pllac) =>
-                                {
-                                    return new GMapMarkerADSBPlane(pllac, pllac.Heading)
-                                    {
-                                        Tag = pllac
-                                    };
-                                },
-                                (pllau, marker) =>
-                                {
-                                    var adsbplane = marker as GMapMarkerADSBPlane;
-
-                                    if (adsbplane == null || pllau == null)
-                                        return;
-
-                                    adsbplane.ToolTipText = "ICAO: " + pllau.Tag + "\n" +
-                                                            "Callsign: " + pllau.CallSign + "\n" +
-                                                            "Squawk: " + pllau.Squawk.ToString("X4") + "\n" +
-                                                            "Alt: " + (pllau.Alt * CurrentState.multiplieralt).ToString("0") + " " + CurrentState.AltUnit + "\n" +
-                                                            "Speed: " + (pllau.Speed / 100 /* cm to m */ * CurrentState.multiplierspeed).ToString("0") + " " + CurrentState.SpeedUnit + "\n" +
-                                                            "VSpeed: " + (pllau.VerticalSpeed / 100 /* cm to m */ * CurrentState.multiplierspeed).ToString("F1") + " " + CurrentState.SpeedUnit + "\n" +
-                                                            "Heading: " + pllau.Heading.ToString("0") + "°";
-                                    // Add distance
-                                    if (MainV2.comPort.MAV.cs.Location.Lat != 0 && MainV2.comPort.MAV.cs.Location.Lng != 0)
-                                        adsbplane.ToolTipText += "\n" + "Distance: " + (pllau.GetDistance(MainV2.comPort.MAV.cs.Location) * CurrentState.multiplierdist).ToString("0") + " " + CurrentState.DistanceUnit;
-                                    // Add collision threat level
-                                    if (pllau.ThreatLevel != MAVLink.MAV_COLLISION_THREAT_LEVEL.NONE)
-                                        adsbplane.ToolTipText += "\n" + "Collision risk: " + (pllau.ThreatLevel == MAVLink.MAV_COLLISION_THREAT_LEVEL.LOW ? "Warning" : "Danger");
-                                    adsbplane.ToolTipMode = MarkerTooltipMode.OnMouseOver;
-                                    adsbplane.Position = pllau;
-                                    adsbplane.heading = pllau.Heading;
-                                    adsbplane.Tag = pllau;
-
-                                    if (((DateTime) pllau.Time) > DateTime.Now.AddSeconds(-30))
-                                    {
-                                        adsbplane.IsVisible = true;
-
-                                        switch (pllau.ThreatLevel)
-                                        {
-                                            case MAVLink.MAV_COLLISION_THREAT_LEVEL.NONE:
-                                                adsbplane.AlertLevel = GMapMarkerADSBPlane.AlertLevelOptions.Orange;
-                                                break;
-                                            case MAVLink.MAV_COLLISION_THREAT_LEVEL.LOW:
-                                                adsbplane.AlertLevel = GMapMarkerADSBPlane.AlertLevelOptions.Orange;
-                                                break;
-                                            case MAVLink.MAV_COLLISION_THREAT_LEVEL.HIGH:
-                                                adsbplane.AlertLevel = GMapMarkerADSBPlane.AlertLevelOptions.Red;
-                                                break;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        adsbplane.IsVisible = false;
-                                    }
-                                });
-                        }
 
 
                         if (route.Points.Count > 0)
@@ -4551,45 +4556,87 @@ namespace MissionPlanner.GCSViews
                 || GetTagMarker == null || create == null || update == null)
                 return;
 
+            var items = list.ToArray();
             var markers = gMapOverlay.Markers.Where(a => a is TMarker).ToArray();
 
-            foreach (var item in list)
+            // index the existing markers by tag: the first one for a tag is the one updated, the last one is
+            // removed when there are several. Markers and items always have a tag, so a null one never matches.
+            var firstbytag = new Dictionary<string, GMapMarker>(markers.Length);
+            var lastbytag = new Dictionary<string, GMapMarker>(markers.Length);
+            var countbytag = new Dictionary<string, int>(markers.Length);
+            var markertags = new string[markers.Length];
+            for (int i = 0; i < markers.Length; i++)
+            {
+                var tag = GetTagMarker(markers[i]);
+                markertags[i] = tag;
+                if (tag == null)
+                    continue;
+                if (!firstbytag.ContainsKey(tag))
+                    firstbytag[tag] = markers[i];
+                if (markers[i].Tag != null)
+                {
+                    lastbytag[tag] = markers[i];
+                    int count;
+                    countbytag.TryGetValue(tag, out count);
+                    countbytag[tag] = count + 1;
+                }
+            }
+
+            var add = new List<GMapMarker>();
+            var remove = new List<GMapMarker>();
+            var sourcetags = new HashSet<string>();
+
+            foreach (var item in items)
             {
                 if (item == null)
                     continue;
 
-                if (markers.Any(a => a is TMarker && GetTagMarker(a) == GetTagSource(item)))
+                var tag = GetTagSource(item);
+                sourcetags.Add(tag);
+
+                GMapMarker existing;
+                if (tag != null && firstbytag.TryGetValue(tag, out existing))
                 {
-                    update(item, markers.First(a => a is TMarker && GetTagMarker(a) == GetTagSource(item)));
+                    update(item, existing);
                 }
                 else
                 {
                     // skip invalid tags
-                    if (GetTagSource(item) == null)
+                    if (tag == null)
                         continue;
                     // new marker
                     var marker = create(item);
                     if (marker == null)
                         continue;
                     update(item, marker);
-                    BeginInvoke((Action) delegate { gMapOverlay.Markers.Add(marker); });
+                    add.Add(marker);
                 }
             }
 
             // run cleanup
-            var sourcelist = list.Select(item => GetTagSource(item));
-            markers.ForEach(a =>
+            for (int i = 0; i < markers.Length; i++)
             {
-                if (a is TMarker && !sourcelist.Contains(GetTagMarker(a)))
-                    BeginInvoke((Action) delegate { gMapOverlay.Markers.Remove(a); });
-            });
+                if (!sourcetags.Contains(markertags[i]))
+                    remove.Add(markers[i]);
+            }
+
             // remove dups - can happen because the delayed invoke on first create
-            sourcelist.Distinct().ForEach(a =>
+            foreach (var tag in sourcetags)
             {
-                var sublist = markers.Where(b => b.Tag != null && GetTagMarker(b) == a);
-                if (sublist.Count() > 1)
-                    BeginInvoke((Action) delegate { gMapOverlay.Markers.Remove(sublist.Last()); });
-            });
+                int count;
+                if (tag != null && countbytag.TryGetValue(tag, out count) && count > 1)
+                    remove.Add(lastbytag[tag]);
+            }
+
+            // one trip to the UI thread for all of it
+            if (add.Count > 0 || remove.Count > 0)
+                BeginInvoke((Action) delegate
+                {
+                    foreach (var marker in add)
+                        gMapOverlay.Markers.Add(marker);
+                    foreach (var marker in remove)
+                        gMapOverlay.Markers.Remove(marker);
+                });
         }
 
         /// <summary>
