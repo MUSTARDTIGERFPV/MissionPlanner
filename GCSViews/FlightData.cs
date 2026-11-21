@@ -2718,7 +2718,8 @@ namespace MissionPlanner.GCSViews
             if (thisthread == null)
                 return;
 
-            while (thisthread.IsAlive && DateTime.Now < end)
+            // pump messages while waiting, without spinning a core
+            while (!thisthread.Join(10) && DateTime.Now < end)
             {
                 Application.DoEvents();
             }
