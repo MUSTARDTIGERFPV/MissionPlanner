@@ -311,19 +311,29 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
 
             // the params are written off the UI thread as one request, while user input is ignored
-            // (see VehicleRequest); each row is updated as its param is written, and the messages for
-            // the ones that failed are shown once the request is done
+            // (see VehicleRequest); each row is updated as its param is written, and the ones that
+            // failed are listed once the request is done. Each failure has already waited out its
+            // retries, so on a link that has gone the rest are not tried.
+            const int maxFailuresInARow = 3;
             var port = MainV2.comPort;
             var newValues = temp.ToDictionary(a => a, a => (double)_changes[a]);
             var written = new List<string>();
             var failed = new List<string>();
             var notconnected = false;
+            var gaveup = false;
             try
             {
                 await VehicleRequest.RunAsync(() =>
                 {
+                    var failuresInARow = 0;
                     foreach (string value in temp)
                     {
+                        if (failuresInARow >= maxFailuresInARow)
+                        {
+                            gaveup = true;
+                            return;
+                        }
+
                         try
                         {
                             if (port.BaseStream == null || !port.BaseStream.IsOpen)
@@ -337,9 +347,11 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                         catch
                         {
                             failed.Add(value);
+                            failuresInARow++;
                             continue;
                         }
 
+                        failuresInARow = 0;
                         written.Add(value);
                         try
                         {
@@ -357,10 +369,14 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                 log.Error(ex);
             }
 
-            foreach (string value in failed)
+            if (failed.Count > 0)
             {
-                error++;
-                CustomMessageBox.Show("Set " + value + " Failed");
+                error += failed.Count;
+                var failedMessage = string.Join(Environment.NewLine, failed.Select(value => "Set " + value + " Failed"));
+                if (gaveup)
+                    failedMessage += Environment.NewLine + Environment.NewLine + maxFailuresInARow +
+                                     " failed in a row, so the remaining parameters were not sent.";
+                CustomMessageBox.Show(failedMessage);
             }
 
             if (notconnected)
