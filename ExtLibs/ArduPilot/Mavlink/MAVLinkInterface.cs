@@ -66,21 +66,34 @@ namespace MissionPlanner
             }
         }
 
+        /// <summary>
+        /// Text for the event subscribe/unsubscribe log lines, naming the code that called the event
+        /// accessor. File/line info is skipped because it needs a PDB lookup on every call.
+        /// </summary>
+        private static string SubscriptionInfo(string action, Delegate value)
+        {
+            // skip this method and the accessor by name: either frame is missing if the JIT inlined it
+            var caller = new StackTrace(0, false).GetFrames()?.Select(f => f.GetMethod())
+                .FirstOrDefault(m => m != null && !(m.DeclaringType == typeof(MAVLinkInterface) &&
+                                                    (m.Name == nameof(SubscriptionInfo) ||
+                                                     m.Name.StartsWith("add_") || m.Name.StartsWith("remove_"))));
+            return action + " " + caller?.DeclaringType?.FullName + "." + caller?.Name + " " + value?.Method?.Name +
+                   " " + value?.Target?.GetType()?.Name + " " + value;
+        }
+
         public event EventHandler<MAVLinkMessage> OnPacketReceived
         {
             add
             {
-                log.Debug("Subscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value?.Method?.Name +
-                         " " + value?.Target?.GetType()?.Name +
-                         " " + value);
+                if (log.IsDebugEnabled)
+                    log.Debug(SubscriptionInfo("Subscribed", value));
                 _OnPacketReceived += value;
             }
 
             remove
             {
-                log.Debug("UnSubscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " +
-                         value?.Method?.Name + " " + value?.Target?.GetType()?.Name +
-                         " " + value);
+                if (log.IsDebugEnabled)
+                    log.Debug(SubscriptionInfo("UnSubscribed", value));
                 _OnPacketReceived -= value;
             }
         }
@@ -89,17 +102,15 @@ namespace MissionPlanner
         {
             add
             {
-                log.Debug("Subscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value?.Method?.Name +
-                         " " + value?.Target?.GetType()?.Name +
-                         " " + value);
+                if (log.IsDebugEnabled)
+                    log.Debug(SubscriptionInfo("Subscribed", value));
                 _MAVDetected += value;
             }
 
             remove
             {
-                log.Debug("UnSubscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " +
-                         value?.Method?.Name + " " + value?.Target?.GetType()?.Name +
-                         " " + value);
+                if (log.IsDebugEnabled)
+                    log.Debug(SubscriptionInfo("UnSubscribed", value));
                 _MAVDetected -= value;
             }
         }
@@ -115,16 +126,14 @@ namespace MissionPlanner
         {
             add
             {
-                log.Debug("Subscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsDebugEnabled)
+                    log.Debug(SubscriptionInfo("Subscribed", value));
                 _OnPacketSent += value;
             }
             remove
             {
-                log.Debug("UnSubscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsDebugEnabled)
+                    log.Debug(SubscriptionInfo("UnSubscribed", value));
                 _OnPacketSent -= value;
             }
         }
@@ -133,16 +142,14 @@ namespace MissionPlanner
         {
             add
             {
-                log.Info("Subscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsInfoEnabled)
+                    log.Info(SubscriptionInfo("Subscribed", value));
                 _UpdateADSBPlanePosition += value;
             }
             remove
             {
-                log.Info("UnSubscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsInfoEnabled)
+                    log.Info(SubscriptionInfo("UnSubscribed", value));
                 _UpdateADSBPlanePosition -= value;
             }
         }
@@ -151,16 +158,14 @@ namespace MissionPlanner
         {
             add
             {
-                log.Info("Subscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsInfoEnabled)
+                    log.Info(SubscriptionInfo("Subscribed", value));
                 _UpdateADSBCollision += value;
             }
             remove
             {
-                log.Info("UnSubscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsInfoEnabled)
+                    log.Info(SubscriptionInfo("UnSubscribed", value));
                 _UpdateADSBCollision -= value;
             }
         }
@@ -177,16 +182,14 @@ namespace MissionPlanner
         {
             add
             {
-                log.Debug("Subscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsDebugEnabled)
+                    log.Debug(SubscriptionInfo("Subscribed", value));
                 _ParamListChanged += value;
             }
             remove
             {
-                log.Debug("UnSubscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsDebugEnabled)
+                    log.Debug(SubscriptionInfo("UnSubscribed", value));
                 _ParamListChanged -= value;
             }
         }
@@ -195,16 +198,14 @@ namespace MissionPlanner
         {
             add
             {
-                log.Info("Subscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsInfoEnabled)
+                    log.Info(SubscriptionInfo("Subscribed", value));
                 _MavChanged += value;
             }
             remove
             {
-                log.Info("UnSubscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsInfoEnabled)
+                    log.Info(SubscriptionInfo("UnSubscribed", value));
                 _MavChanged -= value;
             }
         }
@@ -213,16 +214,14 @@ namespace MissionPlanner
         {
             add
             {
-                log.Info("Subscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsInfoEnabled)
+                    log.Info(SubscriptionInfo("Subscribed", value));
                 _CommsClose += value;
             }
             remove
             {
-                log.Info("UnSubscribed " + new StackTrace(1, true)?.GetFrame(0)?.ToString() + " " + value.Method.Name +
-                         " " + value.Target.GetType().Name +
-                         " " + value);
+                if (log.IsInfoEnabled)
+                    log.Info(SubscriptionInfo("UnSubscribed", value));
                 _CommsClose -= value;
             }
         }

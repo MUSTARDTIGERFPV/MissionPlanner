@@ -856,7 +856,27 @@ namespace MissionPlanner
 
             try
             {
-                log.Debug(Process.GetCurrentProcess().Modules.ToJSON());
+                // one line per module (path + file version) instead of the full ProcessModule JSON
+                if (log.IsDebugEnabled)
+                {
+                    var modules = new StringBuilder("Loaded modules:");
+                    foreach (ProcessModule module in Process.GetCurrentProcess().Modules)
+                    {
+                        string version;
+                        try
+                        {
+                            version = module.FileVersionInfo.FileVersion;
+                        }
+                        catch
+                        {
+                            version = "?";
+                        }
+
+                        modules.AppendLine().Append("  ").Append(module.FileName).Append(' ').Append(version);
+                    }
+
+                    log.Debug(modules.ToString());
+                }
             }
             catch
             {

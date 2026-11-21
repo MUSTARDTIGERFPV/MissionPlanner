@@ -557,17 +557,22 @@ namespace MissionPlanner
         private static void CurrentDomain_FirstChanceException(object sender,
             System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
         {
-            log.Debug("FirstChanceException in: " + e.Exception.Source, e.Exception);
+            if (log.IsDebugEnabled)
+                log.Debug("FirstChanceException in: " + e.Exception.Source, e.Exception);
         }
 
         private static Assembly CurrentDomain_TypeResolve(object sender, ResolveEventArgs args)
         {
-            log.Debug("TypeResolve Failed: " + args.Name + " from " + args.RequestingAssembly);
+            if (log.IsDebugEnabled)
+                log.Debug("TypeResolve Failed: " + args.Name + " from " + args.RequestingAssembly);
             return null;
         }
 
         private static void CurrentDomain_AssemblyLoad(object sender, AssemblyLoadEventArgs args)
         {
+            if (!log.IsDebugEnabled)
+                return;
+
             if (!args.LoadedAssembly.IsDynamic)
                 log.Debug("Loaded: " + args.LoadedAssembly + " from " + args.LoadedAssembly.Location);
             else
