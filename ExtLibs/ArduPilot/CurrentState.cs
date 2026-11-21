@@ -4677,8 +4677,11 @@ namespace MissionPlanner
             lock (this)
             {
                 // the 20hz upkeep below (link quality, timers, stream re-requests that write to the link) is run by
-                // the threads that feed this state, which pass no binding. a ui binding refresh only reads the state.
-                if (bs == null && (DateTime.Now > lastupdate.AddMilliseconds(50) || updatenow)) // 20 hz
+                // the threads that feed this state, which pass no binding. a ui binding refresh only reads the state,
+                // unless the link is closed: then no reader runs it, and link quality and the timers must still age out.
+                var linkclosed = mavinterface?.BaseStream != null && !mavinterface.BaseStream.IsOpen &&
+                                 !mavinterface.logreadmode;
+                if ((bs == null || linkclosed) && (DateTime.Now > lastupdate.AddMilliseconds(50) || updatenow)) // 20 hz
                 {
                     lastupdate = DateTime.Now;
 
