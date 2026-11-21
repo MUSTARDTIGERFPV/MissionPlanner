@@ -1349,6 +1349,8 @@ namespace GMap.NET.WindowsForms
 
                 ScaleFont.Dispose();
                 ScalePen.Dispose();
+                scaleBrush?.Dispose();
+                scaleBrush = null;
                 CenterFormat.Dispose();
                 CenterPen.Dispose();
                 BottomFormat.Dispose();

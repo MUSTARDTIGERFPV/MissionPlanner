@@ -181,5 +181,13 @@ namespace MissionPlanner.Maps
             }
             g.Transform = old;
         }
+
+        public override void Dispose()
+        {
+            scaleImage?.Dispose();
+            scaleImage = null;
+
+            base.Dispose();
+        }
     }
 }
