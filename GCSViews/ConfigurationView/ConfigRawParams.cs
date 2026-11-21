@@ -581,18 +581,19 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                 bool has_defaults = false;
 
-                Parallel.ForEach(list, value =>
+                var fav_params = new HashSet<string>(Settings.Instance.GetList("fav_params"));
+
+                // metadata lookups are cheap now, so build the rows on the UI thread that owns Params
+                foreach (var value in list)
                 {
                     if (value == null || value == "")
-                        return;
+                        continue;
 
                     var row = new DataGridViewRow() { Height = 36 };
-                    lock (rowlist)
-                        rowlist.Add(row);
+                    rowlist.Add(row);
                     row.CreateCells(Params);
                     row.Cells[Command.Index].Value = value;
                     row.Cells[Value.Index].Value = MainV2.comPort.MAV.param[value].ToString();
-                    var fav_params = Settings.Instance.GetList("fav_params");
                     row.Cells[Fav.Index].Value = fav_params.Contains(value);
 
                     if (MainV2.comPort.MAV.param[value].default_value.HasValue) {
@@ -648,7 +649,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                     {
                         log.Error(ex);
                     }
-                });
+                }
 
                 Default_value.Visible = has_defaults;
                 chk_none_default.Visible = has_defaults;
