@@ -1415,16 +1415,18 @@ namespace MissionPlanner.GCSViews
             try
             {
                 var port = MainV2.comPort;
+                var sysid = port.sysidcurrent;
+                var compid = (byte) port.compidcurrent;
                 var mode = (int) CMB_mountmode.SelectedValue;
                 if (MainV2.comPort.MAV.param.ContainsKey("MNT_MODE"))
                 {
-                    await VehicleRequest.RunAsync(() => port.setParam(port.sysidcurrent, (byte) port.compidcurrent,
+                    await VehicleRequest.RunAsync(() => port.setParam(sysid, compid,
                         "MNT_MODE", mode));
                 }
                 else
                 {
                     // copter 3.3 acks with an error, but is ok
-                    await VehicleRequest.RunAsync(() => port.doCommand(port.sysidcurrent, (byte) port.compidcurrent,
+                    await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid,
                         MAVLink.MAV_CMD.DO_MOUNT_CONTROL, 0, 0, 0, 0, 0, 0,
                         mode));
                 }
@@ -1749,13 +1751,15 @@ namespace MissionPlanner.GCSViews
             // the requests below wait for the vehicle off the UI thread, while user input is ignored;
             // the prompt stays on the UI thread
             var port = MainV2.comPort;
+            var sysid = port.MAV.sysid;
+            var compid = port.MAV.compid;
 
             if (CMB_action.Text == actions.Format_SD_Card.ToString())
             {
                  try
                 {
                     //p1 and p2 must be 1 to initate SD card format
-                    await VehicleRequest.RunAsync(() => port.doCommandInt(port.MAV.sysid, port.MAV.compid, MAVLink.MAV_CMD.STORAGE_FORMAT, 1, 1, 0, 0, 0, 0, 0));
+                    await VehicleRequest.RunAsync(() => port.doCommandInt(sysid, compid, MAVLink.MAV_CMD.STORAGE_FORMAT, 1, 1, 0, 0, 0, 0, 0));
                     return;
                 }
                 catch
@@ -1770,7 +1774,19 @@ namespace MissionPlanner.GCSViews
             {
                 if (CMB_action.Text == actions.Trigger_Camera.ToString())
                 {
-                    await VehicleRequest.RunAsync(() => port.setDigicamControl(true));
+                    // setDigicamControl(true), for the vehicle selected now
+                    await VehicleRequest.RunAsync(() =>
+                    {
+                        if (!port.doCommand(sysid, compid, MAVLink.MAV_CMD.DO_DIGICAM_CONTROL, 0, 0, 0, 0, 1, 0, 0))
+                        {
+                            port.sendPacket(new MAVLink.mavlink_digicam_control_t
+                            {
+                                target_system = (byte) sysid,
+                                target_component = compid,
+                                shot = 1
+                            }, sysid, compid);
+                        }
+                    });
                     return;
                 }
             }
@@ -1784,7 +1800,7 @@ namespace MissionPlanner.GCSViews
             {
                 try
                 {
-                    await VehicleRequest.RunAsync(() => port.doCommandInt(port.MAV.sysid, port.MAV.compid, MAVLink.MAV_CMD.SCRIPTING, (int)MAVLink.SCRIPTING_CMD.STOP_AND_RESTART, 0, 0, 0, 0, 0, 0));
+                    await VehicleRequest.RunAsync(() => port.doCommandInt(sysid, compid, MAVLink.MAV_CMD.SCRIPTING, (int)MAVLink.SCRIPTING_CMD.STOP_AND_RESTART, 0, 0, 0, 0, 0, 0));
                     return;
                 }
                 catch
@@ -1798,7 +1814,7 @@ namespace MissionPlanner.GCSViews
             {
                 try
                 {
-                    await VehicleRequest.RunAsync(() => port.doCommandInt(port.MAV.sysid, port.MAV.compid, MAVLink.MAV_CMD.SCRIPTING, (int)MAVLink.SCRIPTING_CMD.STOP, 0, 0, 0, 0, 0, 0));
+                    await VehicleRequest.RunAsync(() => port.doCommandInt(sysid, compid, MAVLink.MAV_CMD.SCRIPTING, (int)MAVLink.SCRIPTING_CMD.STOP, 0, 0, 0, 0, 0, 0));
                     return;
                 }
                 catch
@@ -1849,14 +1865,14 @@ namespace MissionPlanner.GCSViews
 
                     if (CMB_action.Text == actions.Terminate_Flight.ToString())
                     {
-                        await VehicleRequest.RunAsync(() => port.doCommand(port.MAV.sysid, port.MAV.compid, MAVLink.MAV_CMD.DO_FLIGHTTERMINATION, 1.0f, 0, 0, 0, 0, 0, 0));
+                        await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid, MAVLink.MAV_CMD.DO_FLIGHTTERMINATION, 1.0f, 0, 0, 0, 0, 0, 0));
                         ((Control)sender).Enabled = true;
                         return;
                     }
 
                     if (CMB_action.Text == actions.Parachute_Release.ToString())
                     {
-                        if (!await VehicleRequest.RunAsync(() => port.doCommand(MAVLink.MAV_CMD.DO_PARACHUTE,
+                        if (!await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid, MAVLink.MAV_CMD.DO_PARACHUTE,
                                 (float) MAVLink.PARACHUTE_ACTION.PARACHUTE_RELEASE, 0, 0, 0, 0, 0, 0)))
                         {
                             CustomMessageBox.Show(Strings.CommandFailed + " " + MAVLink.MAV_CMD.DO_PARACHUTE, Strings.ERROR);
@@ -1869,8 +1885,6 @@ namespace MissionPlanner.GCSViews
                     {
                         // what doReboot() does, except that it reconnects a direct USB link from the
                         // request's thread, and the reconnect shows a dialog, which belongs on this one
-                        var sysid = port.sysidcurrent;
-                        var compid = (byte) port.compidcurrent;
                         var rebooted = await VehicleRequest.RunAsync(() =>
                         {
                             var ans = port.doCommand(sysid, compid, MAVLink.MAV_CMD.PREFLIGHT_REBOOT_SHUTDOWN,
@@ -1895,20 +1909,20 @@ namespace MissionPlanner.GCSViews
                     if (CMB_action.Text == actions.Reboot_Mass_Storage.ToString())
                     {
                         const float rebootToMassStorage = 5f; // ArduPilot REBOOT_TO_MASS_STORAGE action
-                        await VehicleRequest.RunAsync(() => port.doCommand(port.MAV.sysid, port.MAV.compid,
+                        await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid,
                             MAVLink.MAV_CMD.PREFLIGHT_REBOOT_SHUTDOWN, rebootToMassStorage, 0, 0, 0, 0, 0, 0));
                         ((Control) sender).Enabled = true;
                         return;
                     }
                     if (CMB_action.Text == actions.HighLatency_Enable.ToString())
                     {
-                        await VehicleRequest.RunAsync(() => port.doHighLatency(true));
+                        await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid, MAVLink.MAV_CMD.CONTROL_HIGH_LATENCY, 1, 0, 0, 0, 0, 0, 0));
                         ((Control)sender).Enabled = true;
                         return;
                     }
                     if (CMB_action.Text == actions.HighLatency_Disable.ToString())
                     {
-                        await VehicleRequest.RunAsync(() => port.doHighLatency(false));
+                        await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid, MAVLink.MAV_CMD.CONTROL_HIGH_LATENCY, 0, 0, 0, 0, 0, 0, 0));
                         ((Control)sender).Enabled = true;
                         return;
                     }
@@ -1927,13 +1941,13 @@ namespace MissionPlanner.GCSViews
                     }
                     if (CMB_action.Text == actions.Engine_Start.ToString())
                     {
-                        await VehicleRequest.RunAsync(() => port.doEngineControl(port.sysidcurrent, (byte)port.compidcurrent, true));
+                        await VehicleRequest.RunAsync(() => port.doEngineControl(sysid, compid, true));
                         ((Control)sender).Enabled = true;
                         return;
                     }
                     if (CMB_action.Text == actions.Engine_Stop.ToString())
                     {
-                        await VehicleRequest.RunAsync(() => port.doEngineControl(port.sysidcurrent, (byte)port.compidcurrent, false));
+                        await VehicleRequest.RunAsync(() => port.doEngineControl(sysid, compid, false));
                         ((Control)sender).Enabled = true;
                         return;
                     }
@@ -1956,7 +1970,7 @@ namespace MissionPlanner.GCSViews
                             "DO_START_" + CMB_action.Text.ToUpper(CultureInfo.InvariantCulture));
                     }
 
-                    if (await VehicleRequest.RunAsync(() => port.doCommand(cmd, param1, param2, param3, 0, 0, 0, 0)))
+                    if (await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid, cmd, param1, param2, param3, 0, 0, 0, 0)))
                     {
 
                     }
