@@ -129,6 +129,7 @@ namespace MissionPlanner.Maps
             }
 
             var temp = g.Transform;
+            var smoothing = g.SmoothingMode;
             g.TranslateTransform(LocalPosition.X, LocalPosition.Y);
             g.TranslateTransform(-Offset.X, -Offset.Y);
             g.RotateTransform(-Overlay.Control.Bearing);
@@ -137,7 +138,7 @@ namespace MissionPlanner.Maps
             try
             {
                 if (DisplayHeading)
-                    g.DrawLine(new Pen(Color.Red, 2), 0.0f, 0.0f,
+                    g.DrawLine(HeadingPen, 0.0f, 0.0f,
                         (float) Math.Cos((Heading - 90) * MathHelper.deg2rad) * length,
                         (float) Math.Sin((Heading - 90) * MathHelper.deg2rad) * length);
             }
@@ -147,11 +148,11 @@ namespace MissionPlanner.Maps
 
             //g.DrawLine(new Pen(Color.Green, 2), 0.0f, 0.0f, (float)Math.Cos((nav_bearing - 90) * MathHelper.deg2rad) * length, (float)Math.Sin((nav_bearing - 90) * MathHelper.deg2rad) * length);
             if (DisplayCOG)
-                g.DrawLine(new Pen(Color.Black, 2), 0.0f, 0.0f,
+                g.DrawLine(CogPen, 0.0f, 0.0f,
                     (float) Math.Cos((Cog - 90) * MathHelper.deg2rad) * length,
                     (float) Math.Sin((Cog - 90) * MathHelper.deg2rad) * length);
             if (DisplayTarget)
-                g.DrawLine(new Pen(Color.Orange, 2), 0.0f, 0.0f,
+                g.DrawLine(TargetPen, 0.0f, 0.0f,
                     (float) Math.Cos((Target - 90) * MathHelper.deg2rad) * length,
                     (float) Math.Sin((Target - 90) * MathHelper.deg2rad) * length);
             // anti NaN
@@ -190,7 +191,7 @@ namespace MissionPlanner.Maps
                 g.RotateTransform(-framerotation);
             }
 
-            g.DrawString(Sysid.ToString(), new Font(FontFamily.GenericMonospace, 15, FontStyle.Bold), thistextbrush, -8, -8);
+            g.DrawString(Sysid.ToString(), SysidFont, thistextbrush, -8, -8);
 
             g.Transform = temp;
 
@@ -206,6 +207,7 @@ namespace MissionPlanner.Maps
                 var markerDimension = (int)Math.Abs(loc.X - LocalPosition.X);
                 if (markerDimension == 0)
                 {
+                    g.SmoothingMode = smoothing;
                     return;
                 }
 
@@ -221,6 +223,7 @@ namespace MissionPlanner.Maps
                 markerDimension = (int)Math.Abs(loc.X - LocalPosition.X);
                 if (markerDimension == 0)
                 {
+                    g.SmoothingMode = smoothing;
                     return;
                 }
 
@@ -232,6 +235,8 @@ namespace MissionPlanner.Maps
                             markerDimension, markerDimension), 0,
                         360);
             }
+
+            g.SmoothingMode = smoothing;
         }
     }
 }

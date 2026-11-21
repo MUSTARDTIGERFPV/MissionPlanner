@@ -13,6 +13,13 @@ namespace MissionPlanner.Maps
 
         static SolidBrush shadow = new SolidBrush(Color.FromArgb(50, Color.Black));
 
+        // body colour by 'which % 7' (White when negative), and the same at alpha 100 for IsTransparent
+        static readonly Color[] planeColors =
+            {Color.Red, Color.Black, Color.Blue, Color.LimeGreen, Color.Yellow, Color.Orange, Color.Pink, Color.White};
+        static readonly SolidBrush[] planeBrushes = Array.ConvertAll(planeColors, c => new SolidBrush(c));
+        static readonly SolidBrush[] planeBrushesTransparent =
+            Array.ConvertAll(planeColors, c => new SolidBrush(Color.FromArgb(100, c)));
+
         static Point[] plane = new Point[] {
             new Point(28,0),
             new Point(32,13),
@@ -80,6 +87,7 @@ namespace MissionPlanner.Maps
             }
 
             var temp = g.Transform;
+            var smoothing = g.SmoothingMode;
             g.TranslateTransform(LocalPosition.X, LocalPosition.Y);
 
             g.RotateTransform(-Overlay.Control.Bearing);
@@ -88,7 +96,7 @@ namespace MissionPlanner.Maps
             try
             {
                 if (DisplayHeading)
-                    g.DrawLine(new Pen(Color.Red, 2), 0.0f, 0.0f,
+                    g.DrawLine(HeadingPen, 0.0f, 0.0f,
                         (float) Math.Cos((heading - 90) * MathHelper.deg2rad) * length,
                         (float) Math.Sin((heading - 90) * MathHelper.deg2rad) * length);
             }
@@ -97,15 +105,15 @@ namespace MissionPlanner.Maps
             }
 
             if (DisplayNavBearing)
-                g.DrawLine(new Pen(Color.Green, 2), 0.0f, 0.0f,
+                g.DrawLine(NavBearingPen, 0.0f, 0.0f,
                     (float) Math.Cos((nav_bearing - 90) * MathHelper.deg2rad) * length,
                     (float) Math.Sin((nav_bearing - 90) * MathHelper.deg2rad) * length);
             if (DisplayCOG)
-                g.DrawLine(new Pen(Color.Black, 2), 0.0f, 0.0f,
+                g.DrawLine(CogPen, 0.0f, 0.0f,
                     (float) Math.Cos((cog - 90) * MathHelper.deg2rad) * length,
                     (float) Math.Sin((cog - 90) * MathHelper.deg2rad) * length);
             if (DisplayTarget)
-                g.DrawLine(new Pen(Color.Orange, 2), 0.0f, 0.0f,
+                g.DrawLine(TargetPen, 0.0f, 0.0f,
                     (float) Math.Cos((target - 90) * MathHelper.deg2rad) * length,
                     (float) Math.Sin((target - 90) * MathHelper.deg2rad) * length);
             // anti NaN
@@ -132,7 +140,7 @@ namespace MissionPlanner.Maps
 
                         float p2 = (float) Math.Sin((cog) * MathHelper.deg2rad) * scaledradius + scaledradius;
 
-                        g.DrawArc(new Pen(Color.HotPink, 2), p1, p2, Math.Abs(scaledradius) * 2,
+                        g.DrawArc(RadiusPen, p1, p2, Math.Abs(scaledradius) * 2,
                             Math.Abs(scaledradius) * 2, cog, alpha);
                     }
 
@@ -144,7 +152,7 @@ namespace MissionPlanner.Maps
 
                         float p2 = (float) Math.Sin((cog - 180) * MathHelper.deg2rad) * scaledradius + scaledradius;
 
-                        g.DrawArc(new Pen(Color.HotPink, 2), -p1, -p2, scaledradius * 2, scaledradius * 2, cog - 180,
+                        g.DrawArc(RadiusPen, -p1, -p2, scaledradius * 2, scaledradius * 2, cog - 180,
                             alpha);
                     }
                 }
@@ -170,29 +178,13 @@ namespace MissionPlanner.Maps
             // the plane
             g.TranslateTransform(-2, -2);
 
-            var color = Color.White;
-            if (which % 7 == 0)
-                color = Color.Red;
-            if (which % 7 == 1)
-                color = Color.Black;
-            if (which % 7 == 2)
-                color = Color.Blue;
-            if (which % 7 == 3)
-                color = Color.LimeGreen;
-            if (which % 7 == 4)
-                color = Color.Yellow;
-            if (which % 7 == 5)
-                color = Color.Orange;
-            if (which % 7 == 6)
-                color = Color.Pink;
+            var index = which % 7;
+            if (index < 0)
+                index = 7;
 
-            if(IsTransparent)
-            {
-                color = Color.FromArgb(100, color);
-            }
+            g.FillPolygon((IsTransparent ? planeBrushesTransparent : planeBrushes)[index], plane);
 
-            g.FillPolygon(new SolidBrush(color), plane);
-
+            g.SmoothingMode = smoothing;
             g.Transform = temp;
         }
     }

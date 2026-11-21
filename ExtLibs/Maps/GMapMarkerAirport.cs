@@ -14,6 +14,8 @@ namespace MissionPlanner.Maps
     {
         public Pen Pen = new Pen(Brushes.White, 2);
 
+        static readonly SolidBrush AreaFill = new SolidBrush(System.Drawing.Color.FromArgb(25, System.Drawing.Color.Red));
+
         public Color Color
         {
             get { return Pen.Color; }
@@ -97,7 +99,7 @@ namespace MissionPlanner.Maps
             {
                 //g.DrawArc(Pen, new System.Drawing.Rectangle(x, y, widtharc, heightarc), 0, 360);
 
-                g.FillPie(new SolidBrush(Color.FromArgb(25, Color.Red)), x, y, widtharc, heightarc, 0, 360);
+                g.FillPie(AreaFill, x, y, widtharc, heightarc, 0, 360);
             }
         }
     }

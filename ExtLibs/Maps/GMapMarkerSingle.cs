@@ -16,6 +16,22 @@ namespace MissionPlanner.Maps
         float target = -1;
         private long sysid = -1;
 
+        static readonly SolidBrush fontBrushNormal = new SolidBrush(Color.Red);
+        static readonly SolidBrush fontBrushTransparent = new SolidBrush(Color.FromArgb(100, Color.Red));
+#if NET472_OR_GREATER
+        static readonly System.Drawing.Imaging.ImageAttributes iaNormal = new System.Drawing.Imaging.ImageAttributes();
+        static readonly System.Drawing.Imaging.ImageAttributes iaTransparent = CreateTransparentAttributes();
+
+        static System.Drawing.Imaging.ImageAttributes CreateTransparentAttributes()
+        {
+            // Draw image with transparency using a color matrix
+            var ia = new System.Drawing.Imaging.ImageAttributes();
+            var cm = new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.39f };
+            ia.SetColorMatrix(cm, System.Drawing.Imaging.ColorMatrixFlag.Default, System.Drawing.Imaging.ColorAdjustType.Bitmap);
+            return ia;
+        }
+#endif
+
         public GMapMarkerSingle(PointLatLng p, float heading, float cog, float target, long sysid)
             : base(p)
         {
@@ -40,7 +56,7 @@ namespace MissionPlanner.Maps
             try
             {
                 if (DisplayHeading)
-                    g.DrawLine(new Pen(Color.Red, 2), 0.0f, 0.0f,
+                    g.DrawLine(HeadingPen, 0.0f, 0.0f,
                         (float)Math.Cos((heading - 90) * MathHelper.deg2rad) * length,
                         (float)Math.Sin((heading - 90) * MathHelper.deg2rad) * length);
             }
@@ -49,11 +65,11 @@ namespace MissionPlanner.Maps
             }
 
             if (DisplayCOG)
-                g.DrawLine(new Pen(Color.Black, 2), 0.0f, 0.0f,
+                g.DrawLine(CogPen, 0.0f, 0.0f,
                     (float)Math.Cos((cog - 90) * MathHelper.deg2rad) * length,
                     (float)Math.Sin((cog - 90) * MathHelper.deg2rad) * length);
             if (DisplayTarget)
-                g.DrawLine(new Pen(Color.Orange, 2), 0.0f, 0.0f,
+                g.DrawLine(TargetPen, 0.0f, 0.0f,
                     (float)Math.Cos((target - 90) * MathHelper.deg2rad) * length,
                     (float)Math.Sin((target - 90) * MathHelper.deg2rad) * length);
             // anti NaN
@@ -65,23 +81,15 @@ namespace MissionPlanner.Maps
             {
             }
 
-            var fontBrush = new SolidBrush(Color.Red);
+            var fontBrush = IsTransparent ? fontBrushTransparent : fontBrushNormal;
 #if NET472_OR_GREATER
-            var ia = new System.Drawing.Imaging.ImageAttributes();
-            if (IsTransparent)
-            {
-                // Draw image with transparency using a color matrix
-                var cm = new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.39f };
-                ia.SetColorMatrix(cm, System.Drawing.Imaging.ColorMatrixFlag.Default, System.Drawing.Imaging.ColorAdjustType.Bitmap);
-
-                fontBrush.Color = Color.FromArgb(100, fontBrush.Color);
-            }
+            var ia = IsTransparent ? iaTransparent : iaNormal;
             g.DrawImage(icon, new Rectangle(-icon.Width / 2, -icon.Width / 2, icon.Width, icon.Height), 0, 0, icon.Width, icon.Height, GraphicsUnit.Pixel, ia);
 #else
             g.DrawImageUnscaled(icon, icon.Width / -2 + 2, icon.Height / -2);
 #endif
 
-            g.DrawString(sysid.ToString(), new Font(FontFamily.GenericMonospace, 15, FontStyle.Bold), fontBrush, -8, -8);
+            g.DrawString(sysid.ToString(), SysidFont, fontBrush, -8, -8);
 
             g.Transform = temp;
         }

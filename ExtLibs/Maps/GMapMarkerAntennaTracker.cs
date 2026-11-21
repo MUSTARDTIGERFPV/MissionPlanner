@@ -32,11 +32,11 @@ namespace MissionPlanner.Maps
             try
             {
                 // heading
-                g.DrawLine(new Pen(Color.Red, 2), 0.0f, 0.0f, (float) Math.Cos((heading - 90)*MathHelper.deg2rad)*length,
+                g.DrawLine(GMapMarkerBase.HeadingPen, 0.0f, 0.0f, (float) Math.Cos((heading - 90)*MathHelper.deg2rad)*length,
                     (float) Math.Sin((heading - 90)*MathHelper.deg2rad)*length);
 
                 // target
-                g.DrawLine(new Pen(Color.Orange, 2), 0.0f, 0.0f, (float) Math.Cos((target - 90)*MathHelper.deg2rad)*length,
+                g.DrawLine(GMapMarkerBase.TargetPen, 0.0f, 0.0f, (float) Math.Cos((target - 90)*MathHelper.deg2rad)*length,
                     (float) Math.Sin((target - 90)*MathHelper.deg2rad)*length);
             }
             catch

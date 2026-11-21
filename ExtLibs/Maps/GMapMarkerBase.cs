@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Text;
 using GMap.NET;
 using GMap.NET.WindowsForms;
@@ -16,6 +17,15 @@ namespace MissionPlanner.Maps
         public static bool DisplayTargetSetting = true;
         public static int length = 500;
         public static InactiveDisplayStyleEnum InactiveDisplayStyle = InactiveDisplayStyleEnum.Normal;
+
+        // shared drawing objects for the vehicle markers; markers only paint on the UI thread.
+        // never modify these, use a copy
+        internal static readonly Pen HeadingPen = new Pen(Color.Red, 2);
+        internal static readonly Pen NavBearingPen = new Pen(Color.Green, 2);
+        internal static readonly Pen CogPen = new Pen(Color.Black, 2);
+        internal static readonly Pen TargetPen = new Pen(Color.Orange, 2);
+        internal static readonly Pen RadiusPen = new Pen(Color.HotPink, 2);
+        internal static readonly Font SysidFont = new Font(FontFamily.GenericMonospace, 15, FontStyle.Bold);
         
         // Instance variables
         public bool IsActive = true;

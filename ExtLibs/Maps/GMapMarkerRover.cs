@@ -49,7 +49,7 @@ namespace MissionPlanner.Maps
             try
             {
                 if (DisplayHeading)
-                    g.DrawLine(new Pen(Color.Red, 2), 0.0f, 0.0f,
+                    g.DrawLine(HeadingPen, 0.0f, 0.0f,
                         (float) Math.Cos((Heading - 90) * MathHelper.deg2rad) * length,
                         (float) Math.Sin((Heading - 90) * MathHelper.deg2rad) * length);
             }
@@ -58,15 +58,15 @@ namespace MissionPlanner.Maps
             }
 
             if (DisplayNavBearing)
-                g.DrawLine(new Pen(Color.Green, 2), 0.0f, 0.0f,
+                g.DrawLine(NavBearingPen, 0.0f, 0.0f,
                     (float) Math.Cos((Nav_bearing - 90) * MathHelper.deg2rad) * length,
                     (float) Math.Sin((Nav_bearing - 90) * MathHelper.deg2rad) * length);
             if (DisplayCOG)
-                g.DrawLine(new Pen(Color.Black, 2), 0.0f, 0.0f,
+                g.DrawLine(CogPen, 0.0f, 0.0f,
                     (float) Math.Cos((Cog - 90) * MathHelper.deg2rad) * length,
                     (float) Math.Sin((Cog - 90) * MathHelper.deg2rad) * length);
             if (DisplayTarget)
-                g.DrawLine(new Pen(Color.Orange, 2), 0.0f, 0.0f,
+                g.DrawLine(TargetPen, 0.0f, 0.0f,
                     (float) Math.Cos((Target - 90) * MathHelper.deg2rad) * length,
                     (float) Math.Sin((Target - 90) * MathHelper.deg2rad) * length);
             // anti NaN
