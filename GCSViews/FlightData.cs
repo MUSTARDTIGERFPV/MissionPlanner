@@ -1509,6 +1509,12 @@ namespace MissionPlanner.GCSViews
                 DialogResult.OK)
                 return;
 
+            // each vehicle request below runs through VehicleRequest, with user input ignored while it
+            // waits; the waits between attempts are on the UI thread with input enabled, so the pilot can
+            // still act (RTL, disarm...) between steps. The button stays disabled until the sequence ends.
+            var button = sender as Control;
+            if (button != null)
+                button.Enabled = false;
             try
             {
                 if (MainV2.comPort.BaseStream.IsOpen)
@@ -1519,150 +1525,153 @@ namespace MissionPlanner.GCSViews
 
                     if (InputBox.Show("Resume at", "Resume mission at waypoint#", ref lastwp) == DialogResult.OK)
                     {
+                        int timeout = 0;
                         int lastwpno = int.Parse(lastwp);
 
-                        // the whole sequence runs as one request off the UI thread, while user input is
-                        // ignored; the message to show when it stops early is shown afterwards
-                        Action report = null;
-                        bool uploaded = false;
-                        try
+                        // the vehicle selected now is the one the whole sequence is for
+                        var port = MainV2.comPort;
+                        var sysid = port.MAV.sysid;
+                        var compid = port.MAV.compid;
+                        var mav = port.MAV;
+
+                        // reprogram the mission as one request, so nothing can come between its steps
+                        Locationwp lastwpdata = default(Locationwp);
+                        var uploadError = await VehicleRequest.RunAsync(() =>
                         {
-                            await VehicleRequest.RunAsync(() =>
+                            // scan and check wp's we are skipping
+                            // get our target wp
+                            lastwpdata = port.getWP(sysid, compid, (ushort) lastwpno);
+
+                            // get all
+                            List<Locationwp> cmds = new List<Locationwp>();
+
+                            var wpcount = port.getWPCount(sysid, compid);
+
+                            for (ushort a = 0; a < wpcount; a++)
                             {
-                                int timeout = 0;
+                                var wpdata = port.getWP(sysid, compid, a);
 
-                                // scan and check wp's we are skipping
-                                // get our target wp
-                                var lastwpdata = MainV2.comPort.getWP((ushort) lastwpno);
-
-                                // get all
-                                List<Locationwp> cmds = new List<Locationwp>();
-
-                                var wpcount = MainV2.comPort.getWPCount();
-
-                                for (ushort a = 0; a < wpcount; a++)
+                                if (a < lastwpno && a != 0) // allow home
                                 {
-                                    var wpdata = MainV2.comPort.getWP(a);
-
-                                    if (a < lastwpno && a != 0) // allow home
-                                    {
-                                        if (wpdata.id != (ushort) MAVLink.MAV_CMD.TAKEOFF)
-                                            if (wpdata.id < (ushort) MAVLink.MAV_CMD.LAST)
-                                                continue;
-
-                                        if (wpdata.id > (ushort) MAVLink.MAV_CMD.DO_LAST)
+                                    if (wpdata.id != (ushort) MAVLink.MAV_CMD.TAKEOFF)
+                                        if (wpdata.id < (ushort) MAVLink.MAV_CMD.LAST)
                                             continue;
-                                    }
 
-                                    cmds.Add(wpdata);
+                                    if (wpdata.id > (ushort) MAVLink.MAV_CMD.DO_LAST)
+                                        continue;
                                 }
 
-                                ushort wpno = 0;
-                                // upload from wp 0 to end
-                                MainV2.comPort.setWPTotal((ushort) (cmds.Count));
+                                cmds.Add(wpdata);
+                            }
 
-                                // add our do commands
-                                foreach (var loc in cmds)
+                            ushort wpno = 0;
+                            // upload from wp 0 to end
+                            port.setWPTotalAsync(sysid, compid, (ushort) (cmds.Count)).GetAwaiter().GetResult();
+
+                            // add our do commands
+                            foreach (var loc in cmds)
+                            {
+                                MAVLink.MAV_MISSION_RESULT ans = port.setWP(sysid, compid, loc, wpno,
+                                    (MAVLink.MAV_FRAME) (loc.frame));
+                                if (ans != MAVLink.MAV_MISSION_RESULT.MAV_MISSION_ACCEPTED)
                                 {
-                                    MAVLink.MAV_MISSION_RESULT ans = MainV2.comPort.setWP(loc, wpno,
-                                        (MAVLink.MAV_FRAME) (loc.frame));
-                                    if (ans != MAVLink.MAV_MISSION_RESULT.MAV_MISSION_ACCEPTED)
-                                    {
-                                        report = () => CustomMessageBox.Show("Upload wps failed " +
-                                                              Enum.Parse(typeof(MAVLink.MAV_CMD), loc.id.ToString()) + " " +
-                                                              Enum.Parse(typeof(MAVLink.MAV_MISSION_RESULT), ans.ToString()));
-                                        return;
-                                    }
-
-                                    wpno++;
+                                    return "Upload wps failed " +
+                                           Enum.Parse(typeof(MAVLink.MAV_CMD), loc.id.ToString()) + " " +
+                                           Enum.Parse(typeof(MAVLink.MAV_MISSION_RESULT), ans.ToString());
                                 }
 
-                                MainV2.comPort.setWPACK();
+                                wpno++;
+                            }
 
-                                uploaded = true;
+                            port.setWPACK(sysid, compid);
 
-                                // set index back to 1
-                                MainV2.comPort.setWPCurrent(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid, 1);
+                            return (string) null;
+                        });
 
-                                if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduCopter2)
-                                {
-                                    while (MainV2.comPort.MAV.cs.mode.ToLower() != "Guided".ToLower())
-                                    {
-                                        MainV2.comPort.setMode("GUIDED");
-                                        Thread.Sleep(1000);
-                                        timeout++;
-
-                                        if (timeout > 30)
-                                        {
-                                            report = () => CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
-                                            return;
-                                        }
-                                    }
-
-                                    timeout = 0;
-                                    while (!MainV2.comPort.MAV.cs.armed)
-                                    {
-                                        MainV2.comPort.doARM(true);
-                                        Thread.Sleep(1000);
-                                        timeout++;
-
-                                        if (timeout > 30)
-                                        {
-                                            report = () => CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
-                                            return;
-                                        }
-                                    }
-
-                                    timeout = 0;
-                                    while (MainV2.comPort.MAV.cs.alt < (lastwpdata.alt - 2))
-                                    {
-                                        if(!MainV2.comPort.doCommand(MainV2.comPort.sysidcurrent,
-                                            (byte) MainV2.comPort.compidcurrent, MAVLink.MAV_CMD.TAKEOFF, 0, 0, 0, 0, 0, 0,
-                                            lastwpdata.alt)) {
-                                                report = () => CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
-                                                return;
-                                            }
-                                        Thread.Sleep(1000);
-                                        timeout++;
-
-                                        if (timeout > 40)
-                                        {
-                                            report = () => CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
-                                            return;
-                                        }
-                                    }
-                                }
-
-                                timeout = 0;
-                                while (MainV2.comPort.MAV.cs.mode.ToLower() != "AUTO".ToLower())
-                                {
-                                    MainV2.comPort.setMode("AUTO");
-                                    Thread.Sleep(1000);
-                                    timeout++;
-
-                                    if (timeout > 30)
-                                    {
-                                        report = () => CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
-                                        return;
-                                    }
-                                }
-                            });
-                        }
-                        finally
+                        if (uploadError != null)
                         {
-                            // show the reprogrammed mission in the planner, which used to be read back right
-                            // after the upload; the read is a dialog of its own, so it waits until here
-                            if (uploaded)
-                                FlightPlanner.instance.BUT_read_Click(this, null);
+                            CustomMessageBox.Show(uploadError);
+                            return;
                         }
 
-                        report?.Invoke();
+                        FlightPlanner.instance.BUT_read_Click(this, null);
+
+                        // set index back to 1
+                        await VehicleRequest.RunAsync(() => port.setWPCurrent(sysid, compid, 1));
+
+                        if (mav.cs.firmware == Firmwares.ArduCopter2)
+                        {
+                            while (mav.cs.mode.ToLower() != "Guided".ToLower())
+                            {
+                                await VehicleRequest.RunAsync(() => port.setMode(sysid, compid, "GUIDED"));
+                                await Task.Delay(1000);
+                                timeout++;
+
+                                if (timeout > 30)
+                                {
+                                    CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
+                                    return;
+                                }
+                            }
+
+                            timeout = 0;
+                            while (!mav.cs.armed)
+                            {
+                                await VehicleRequest.RunAsync(() => port.doARM(sysid, compid, true));
+                                await Task.Delay(1000);
+                                timeout++;
+
+                                if (timeout > 30)
+                                {
+                                    CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
+                                    return;
+                                }
+                            }
+
+                            timeout = 0;
+                            while (mav.cs.alt < (lastwpdata.alt - 2))
+                            {
+                                if(!await VehicleRequest.RunAsync(() => port.doCommand(sysid,
+                                    compid, MAVLink.MAV_CMD.TAKEOFF, 0, 0, 0, 0, 0, 0,
+                                    lastwpdata.alt))) {
+                                        CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
+                                        return;
+                                    }
+                                await Task.Delay(1000);
+                                timeout++;
+
+                                if (timeout > 40)
+                                {
+                                    CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
+                                    return;
+                                }
+                            }
+                        }
+
+                        timeout = 0;
+                        while (mav.cs.mode.ToLower() != "AUTO".ToLower())
+                        {
+                            await VehicleRequest.RunAsync(() => port.setMode(sysid, compid, "AUTO"));
+                            await Task.Delay(1000);
+                            timeout++;
+
+                            if (timeout > 30)
+                            {
+                                CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
+                                return;
+                            }
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
                 CustomMessageBox.Show(Strings.CommandFailed + "\n" + ex.ToString(), Strings.ERROR);
+            }
+            finally
+            {
+                if (button != null)
+                    button.Enabled = true;
             }
         }
 
