@@ -470,6 +470,7 @@ namespace GMap.NET.WindowsForms
       internal readonly Font MissingDataFont = new Font(FontFamily.GenericSansSerif, 8, FontStyle.Regular);
 #endif
         public Font ScaleFont = new Font(FontFamily.GenericSansSerif, 5, FontStyle.Italic);
+        SolidBrush scaleBrush;
         internal readonly StringFormat CenterFormat = new StringFormat();
         internal readonly StringFormat BottomFormat = new StringFormat();
 #if !PocketPC
@@ -1681,7 +1682,14 @@ namespace GMap.NET.WindowsForms
 #if !PocketPC
             if (MapScaleInfoEnabled)
             {
-                var brush = new SolidBrush(ScalePen.Color);
+                // ScalePen is public, so follow its colour
+                if (scaleBrush == null || scaleBrush.Color != ScalePen.Color)
+                {
+                    scaleBrush?.Dispose();
+                    scaleBrush = new SolidBrush(ScalePen.Color);
+                }
+
+                var brush = scaleBrush;
                 double transform = 1;
                 if (MapRenderTransform.HasValue)
                     transform = MapRenderTransform.Value;
