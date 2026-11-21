@@ -3445,11 +3445,15 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
             MAVLink.MAV_MISSION_TYPE type = MAV_MISSION_TYPE.MISSION)
         {
             while (giveComport == true)
-                Thread.Sleep(10);
+                await Task.Delay(10).ConfigureAwait(false);
 
             bool use_int = (MAVlist[sysid, compid].cs.capabilities & (uint) MAV_PROTOCOL_CAPABILITY.MISSION_INT) > 0;
 
             object req;
+
+            // claim the port before the request goes out, or the SerialReader thread can
+            // read the reply first and this method only sees it again after a 2.5 s retry
+            giveComport = true;
 
             if (use_int)
             {
@@ -3482,7 +3486,6 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                 req = reqf;
             }
 
-            giveComport = true;
             Locationwp loc = new Locationwp();
 
             DateTime start = DateTime.Now;
