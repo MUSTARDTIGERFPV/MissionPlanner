@@ -254,7 +254,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
         }
 
-        private void BUT_writePIDS_Click(object sender, EventArgs e)
+        private async void BUT_writePIDS_Click(object sender, EventArgs e)
         {
             // sort with enable at the bottom - this ensures params are set before the function is disabled
             var temp = _changes.Keys.Cast<string>().ToList();
@@ -310,56 +310,71 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
 
 
-            foreach (string value in temp)
+            // the params are written off the UI thread as one request, while user input is ignored
+            // (see VehicleRequest); each row is updated as its param is written, and the messages for
+            // the ones that failed are shown once the request is done
+            var port = MainV2.comPort;
+            var newValues = temp.ToDictionary(a => a, a => (double)_changes[a]);
+            var written = new List<string>();
+            var failed = new List<string>();
+            var notconnected = false;
+            try
             {
-                try
+                await VehicleRequest.RunAsync(() =>
                 {
-                    if (MainV2.comPort.BaseStream == null || !MainV2.comPort.BaseStream.IsOpen)
+                    foreach (string value in temp)
                     {
-                        CustomMessageBox.Show("Your are not connected", Strings.ERROR);
-                        return;
-                    }
-
-                    MainV2.comPort.setParam(value, (double)_changes[value]);
-                    //check if reboot required
-                    if (ParameterMetaDataRepository.GetParameterRebootRequired(value, MainV2.comPort.MAV.cs.firmware.ToString()))
-                    {
-                        reboot = true;
-                    }
-                    try
-                    {
-                        // set control as well
-                        var textControls = Controls.Find(value, true);
-                        if (textControls.Length > 0)
+                        try
                         {
-                            ThemeManager.ApplyThemeTo(textControls[0]);
-                        }
-                    }
-                    catch
-                    {
-                    }
-
-                    try
-                    {
-                        // set param table as well
-                        foreach (DataGridViewRow row in Params.Rows)
-                        {
-                            if (row.Cells[Command.Index].Value.ToString() == value)
+                            if (port.BaseStream == null || !port.BaseStream.IsOpen)
                             {
-                                row.Cells[Value.Index].Style.BackColor = ThemeManager.ControlBGColor;
-                                _changes.Remove(value);
-                                break;
+                                notconnected = true;
+                                return;
                             }
+
+                            port.setParam(value, newValues[value]);
+                        }
+                        catch
+                        {
+                            failed.Add(value);
+                            continue;
+                        }
+
+                        written.Add(value);
+                        try
+                        {
+                            BeginInvoke((Action) (() => ShowParamWritten(value)));
+                        }
+                        catch
+                        {
+                            // the screen has gone
                         }
                     }
-                    catch
-                    {
-                    }
-                }
-                catch
+                });
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex);
+            }
+
+            foreach (string value in failed)
+            {
+                error++;
+                CustomMessageBox.Show("Set " + value + " Failed");
+            }
+
+            if (notconnected)
+            {
+                CustomMessageBox.Show("Your are not connected", Strings.ERROR);
+                return;
+            }
+
+            foreach (string value in written)
+            {
+                //check if reboot required
+                if (ParameterMetaDataRepository.GetParameterRebootRequired(value, MainV2.comPort.MAV.cs.firmware.ToString()))
                 {
-                    error++;
-                    CustomMessageBox.Show("Set " + value + " Failed");
+                    reboot = true;
                 }
             }
 
@@ -390,6 +405,45 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                     //Click on refresh button
                     BUT_rerequestparams_Click(BUT_rerequestparams, null);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Shows a param as written: its control and its row lose the changed colour.
+        /// </summary>
+        private void ShowParamWritten(string value)
+        {
+            if (IsDisposed)
+                return;
+
+            try
+            {
+                // set control as well
+                var textControls = Controls.Find(value, true);
+                if (textControls.Length > 0)
+                {
+                    ThemeManager.ApplyThemeTo(textControls[0]);
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                // set param table as well
+                foreach (DataGridViewRow row in Params.Rows)
+                {
+                    if (row.Cells[Command.Index].Value.ToString() == value)
+                    {
+                        row.Cells[Value.Index].Style.BackColor = ThemeManager.ControlBGColor;
+                        _changes.Remove(value);
+                        break;
+                    }
+                }
+            }
+            catch
+            {
             }
         }
 
