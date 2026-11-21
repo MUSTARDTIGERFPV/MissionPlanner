@@ -2074,8 +2074,9 @@ namespace MissionPlanner
             Warnings.WarningEngine.Stop();
 
             log.Info("stop CoT output");
-            // its last messages mark each track stale, so TAK greys them out now, not when they expire
-            CotSender.Current?.Stop();
+            // its last messages mark each track stale, so TAK greys them out now, not when they expire.
+            // They normally take about 0.5 s; a stuck link must not hold up closing (the thread is background)
+            CotSender.Current?.Stop(TimeSpan.FromSeconds(2));
 
             log.Info("stop GStreamer");
             GCSViews.FlightData.hudGStreamer.Stop();

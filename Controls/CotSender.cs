@@ -116,11 +116,17 @@ namespace MissionPlanner.Controls
         /// <summary>Ends the run: the tracks it reported are sent once more, already stale, and the transport closes.</summary>
         public void Stop()
         {
+            Stop(TimeSpan.FromSeconds(10));
+        }
+
+        /// <summary>As Stop(), but waits at most <paramref name="wait"/> for the endings to go out.</summary>
+        internal void Stop(TimeSpan wait)
+        {
             lock (startStop)
             {
                 cancel.Cancel();
                 if (thread != null && thread != Thread.CurrentThread)
-                    thread.Join(TimeSpan.FromSeconds(10));
+                    thread.Join(wait);
                 Interlocked.CompareExchange(ref current, null, this);
             }
         }
