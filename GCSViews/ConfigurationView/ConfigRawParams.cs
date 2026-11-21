@@ -891,52 +891,46 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         {
             DateTime start = DateTime.Now;
             Params.Visible = false;
-            if (searchfor.Length >= 2 || searchfor.Length == 0)
-            {
-                Regex filter = new Regex(searchfor.Replace("*", ".*").Replace("..*", ".*"), RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
+            bool search = searchfor.Length >= 2 || searchfor.Length == 0;
+            // not Compiled: a new pattern is built for each search, and compiling costs more than it saves
+            Regex filter = search
+                ? new Regex(searchfor.Replace("*", ".*").Replace("..*", ".*"), RegexOptions.IgnoreCase | RegexOptions.Singleline)
+                : null;
 
-                foreach (DataGridViewRow row in Params.Rows)
+            // one pass, and only touch rows whose visibility changes; each Visible change costs O(rows).
+            // later checks override earlier ones: not-default, then modified, then the search
+            foreach (DataGridViewRow row in Params.Rows)
+            {
+                bool visible = row.Visible;
+
+                if (chk_none_default.Checked)
                 {
-                    string name = row.Cells[Command.Index].Value.ToString();
-                    if (name != filterPrefix.TrimEnd('_') && !name.StartsWith(filterPrefix))
-                    {
-                        row.Visible = false;
-                        continue;
-                    }
-                    foreach (DataGridViewCell cell in row.Cells)
-                    {
-                        if (cell.Value != null && filter.IsMatch(cell.Value.ToString()))
-                        {
-                            row.Visible = true;
-                            break;
-                        }
-                        row.Visible = false;
-                    }
+                    visible = row.Cells[Default_value.Index].Value.ToString() != row.Cells[Value.Index].Value.ToString();
                 }
-            }
-
-            if (chk_modified.Checked)
-            {
-                foreach (DataGridViewRow row in Params.Rows)
+                else if (chk_modified.Checked)
                 {
                     // is it modified? - always show
-                    if (_changes.ContainsKey(row.Cells[Command.Index].Value))
-                    {
-                        row.Visible = true;
-                    }
-                    else
-                    {
-                        row.Visible = false;
-                    }
+                    visible = _changes.ContainsKey(row.Cells[Command.Index].Value);
                 }
-            }
-
-            if (chk_none_default.Checked)
-            {
-                foreach (DataGridViewRow row in Params.Rows)
+                else if (search)
                 {
-                    row.Visible = row.Cells[Default_value.Index].Value.ToString() != row.Cells[Value.Index].Value.ToString();
+                    string name = row.Cells[Command.Index].Value.ToString();
+                    visible = false;
+                    if (name == filterPrefix.TrimEnd('_') || name.StartsWith(filterPrefix))
+                    {
+                        foreach (DataGridViewCell cell in row.Cells)
+                        {
+                            if (cell.Value != null && filter.IsMatch(cell.Value.ToString()))
+                            {
+                                visible = true;
+                                break;
+                            }
+                        }
+                    }
                 }
+
+                if (row.Visible != visible)
+                    row.Visible = visible;
             }
 
             Params.Visible = true;
@@ -1010,7 +1004,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         {
             _filterTimer.Elapsed -= FilterTimerOnElapsed;
             _filterTimer.Stop();
-            _filterTimer.Interval = 500;
+            _filterTimer.Interval = 200;
             _filterTimer.Elapsed += FilterTimerOnElapsed;
             _filterTimer.Start();
         }
