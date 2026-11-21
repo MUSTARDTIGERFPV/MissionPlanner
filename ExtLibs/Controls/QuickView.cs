@@ -32,12 +32,18 @@ namespace MissionPlanner.Controls
                     if (_number.Equals(value))
                         return;
                     _number = value;
+                    // only repaint when the displayed text changes
+                    var text = value.ToString(_numberformat);
+                    if (text == _numberText)
+                        return;
+                    _numberText = text;
                     Invalidate();
                 }
             }
         }
 
         string _numberformat = "0.00";
+        string _numberText;
         private string _desc = "";
         private Color _numbercolor;
 
@@ -53,6 +59,7 @@ namespace MissionPlanner.Controls
                 if (_numberformat.Equals(value))
                     return;
                 _numberformat = value;
+                _numberText = null;
                 this.Invalidate();
             }
         }
@@ -68,6 +75,48 @@ namespace MissionPlanner.Controls
             InitializeComponent();
 
             PaintSurface+= OnPaintSurface;
+            Disposed += (s, e) => ReleasePaintCache();
+        }
+
+        // paint resources, recreated only when the size/font/colour they were made from changes
+        Font _numberFont;
+        float _numberFontSize;
+        Font _numberFontBase;
+        SolidBrush _descBrush;
+        SolidBrush _numberBrush;
+
+        Font GetNumberFont(float size)
+        {
+            if (_numberFont == null || _numberFontSize != size || !ReferenceEquals(_numberFontBase, this.Font))
+            {
+                _numberFont?.Dispose();
+                _numberFont = new Font(this.Font.FontFamily, size, this.Font.Style);
+                _numberFontSize = size;
+                _numberFontBase = this.Font;
+            }
+
+            return _numberFont;
+        }
+
+        static SolidBrush GetBrush(ref SolidBrush brush, Color color)
+        {
+            if (brush == null || brush.Color != color)
+            {
+                brush?.Dispose();
+                brush = new SolidBrush(color);
+            }
+
+            return brush;
+        }
+
+        void ReleasePaintCache()
+        {
+            _numberFont?.Dispose();
+            _numberFont = null;
+            _descBrush?.Dispose();
+            _descBrush = null;
+            _numberBrush?.Dispose();
+            _numberBrush = null;
         }
 
         private void OnPaintSurface(object sender, SKPaintSurfaceEventArgs e2)
@@ -80,7 +129,7 @@ namespace MissionPlanner.Controls
 
                 var mid = extent.Width / 2;
 
-                e.DrawString(desc, this.Font, new SolidBrush(this.ForeColor), this.Width / 2 - mid, 5);
+                e.DrawString(desc, this.Font, GetBrush(ref _descBrush, this.ForeColor), this.Width / 2 - mid, 5);
 
                 y = extent.Height;
             }
@@ -88,7 +137,7 @@ namespace MissionPlanner.Controls
             {
                 var numb = number.ToString(numberformat);
 
-                Size extent = e.MeasureString("0".PadLeft(numb.Length+1,'0'), new Font(this.Font.FontFamily, (float)newSize, this.Font.Style)).ToSize();
+                Size extent = e.MeasureString("0".PadLeft(numb.Length+1,'0'), GetNumberFont((float)newSize)).ToSize();
 
                 float hRatio = (this.Height - y) / (float)(extent.Height);
                 float wRatio = this.Width / (float)extent.Width;
@@ -101,9 +150,11 @@ namespace MissionPlanner.Controls
                 if (newSize < 8 || newSize > 999999)
                     newSize = 8;
 
-                extent = e.MeasureString(numb, new Font(this.Font.FontFamily, (float)newSize, this.Font.Style)).ToSize();
+                var numberFont = GetNumberFont((float)newSize);
 
-                e.DrawString(numb, new Font(this.Font.FontFamily, (float)newSize, this.Font.Style), new SolidBrush(this.numberColor), this.Width / 2 - extent.Width / 2, y + ((this.Height - y) / 2 - extent.Height / 2));
+                extent = e.MeasureString(numb, numberFont).ToSize();
+
+                e.DrawString(numb, numberFont, GetBrush(ref _numberBrush, this.numberColor), this.Width / 2 - extent.Width / 2, y + ((this.Height - y) / 2 - extent.Height / 2));
             }
         }
 
