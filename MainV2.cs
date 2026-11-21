@@ -732,6 +732,9 @@ namespace MissionPlanner
             _connectionControl.CMB_baudrate.TextChanged += this.CMB_baudrate_TextChanged;
             _connectionControl.CMB_serialport.SelectedIndexChanged += this.CMB_serialport_SelectedIndexChanged;
             _connectionControl.CMB_serialport.Click += this.CMB_serialport_Click;
+            _connectionControl.CMB_serialport.MouseEnter += this.CMB_serialport_MouseEnter;
+            _connectionControl.CMB_serialport.DropDownClosed += this.CMB_serialport_DropDownClosed;
+            this.DeviceChanged += this.SerialportList_DeviceChanged;
             _connectionControl.cmb_sysid.Click += cmb_sysid_Click;
 
             _connectionControl.ShowLinkStats += (sender, e) => ShowConnectionStatsForm();
@@ -1283,35 +1286,143 @@ namespace MissionPlanner
 
         private void CMB_serialport_Click(object sender, EventArgs e)
         {
-            string oldport = _connectionControl.CMB_serialport.Text;
-            PopulateSerialportList();
-            if (_connectionControl.CMB_serialport.Items.Contains(oldport))
-                _connectionControl.CMB_serialport.Text = oldport;
+            RefreshSerialportListAsync();
         }
 
-        private void PopulateSerialportList()
+        private void CMB_serialport_MouseEnter(object sender, EventArgs e)
         {
-            _connectionControl.CMB_serialport.Items.Clear();
+            // start early, so the list is usually current by the time it is opened
+            RefreshSerialportListAsync();
+        }
 
-            _connectionControl.CMB_serialport.Items.Add("AUTO");
+        private void SerialportList_DeviceChanged(WM_DEVICECHANGE_enum cause)
+        {
+            if (cause == WM_DEVICECHANGE_enum.DBT_DEVICEARRIVAL || cause == WM_DEVICECHANGE_enum.DBT_DEVICEREMOVECOMPLETE)
+                RefreshSerialportListAsync();
+        }
+
+        private void CMB_serialport_DropDownClosed(object sender, EventArgs e)
+        {
+            if (serialportListDeferred == null)
+                return;
+
+            // after the selection made in the list has been applied
+            BeginInvoke((Action)(() =>
+            {
+                var ports = serialportListDeferred;
+                serialportListDeferred = null;
+                if (ports != null)
+                    ApplySerialportList(ports);
+            }));
+        }
+
+        // UI thread only: whether a refresh is running, whether another was asked for meanwhile, and a
+        // list that arrived while the dropdown was open
+        private bool serialportListRefreshing;
+        private bool serialportListRefreshAgain;
+        private string[] serialportListDeferred;
+
+        /// <summary>
+        /// Enumerate the ports off the UI thread (a stalled driver can block GetPortNames) and update the
+        /// list when done. Overlapping requests are folded into one follow-up refresh.
+        /// </summary>
+        private void RefreshSerialportListAsync()
+        {
+            if (serialportListRefreshing)
+            {
+                serialportListRefreshAgain = true;
+                return;
+            }
+
+            serialportListRefreshing = true;
+
+            Task.Run(() =>
+            {
+                var ports = GetSerialportListPorts();
+                if (ports != null)
+                    SerialPort.RefreshNiceNames(ports);
+
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        serialportListRefreshing = false;
+                        if (ports != null)
+                            ApplySerialportList(ports);
+                        if (serialportListRefreshAgain)
+                        {
+                            serialportListRefreshAgain = false;
+                            RefreshSerialportListAsync();
+                        }
+                    }));
+                }
+                catch (InvalidOperationException)
+                {
+                    // closing
+                }
+            });
+        }
+
+        private string[] GetSerialportListPorts()
+        {
             try
             {
-                _connectionControl.CMB_serialport.Items.AddRange(SerialPort.GetPortNames());
+                return SerialPort.GetPortNames();
             }
             catch (Exception ex)
             {
                 log.Error("Failed to populate serial port dropdown.", ex);
+                return null;
             }
+        }
 
-            _connectionControl.CMB_serialport.Items.Add("TCP");
-            _connectionControl.CMB_serialport.Items.Add("UDP");
-            _connectionControl.CMB_serialport.Items.Add("UDPCl");
-            _connectionControl.CMB_serialport.Items.Add("WS");
+        private void PopulateSerialportList()
+        {
+            var ports = GetSerialportListPorts() ?? new string[0];
+            SerialPort.RefreshNiceNames(ports);
+            ApplySerialportList(ports);
+        }
 
-            foreach (var item in ExtraConnectionList)
+        private void ApplySerialportList(string[] ports)
+        {
+            var combo = _connectionControl.CMB_serialport;
+
+            // don't move entries under the mouse; the list is applied when the dropdown closes
+            if (combo.DroppedDown)
             {
-                _connectionControl.CMB_serialport.Items.Add(item.Label);
+                serialportListDeferred = ports;
+                return;
             }
+
+            var items = new List<string>();
+            items.Add("AUTO");
+            items.AddRange(ports);
+            items.Add("TCP");
+            items.Add("UDP");
+            items.Add("UDPCl");
+            items.Add("WS");
+            items.AddRange(ExtraConnectionList.Select(item => item.Label));
+
+            if (combo.Items.Cast<object>().Select(item => item?.ToString()).SequenceEqual(items))
+                return;
+
+            string oldport = combo.Text;
+
+            combo.BeginUpdate();
+            try
+            {
+                combo.Items.Clear();
+                combo.Items.AddRange(items.Cast<object>().ToArray());
+            }
+            finally
+            {
+                combo.EndUpdate();
+            }
+
+            if (combo.Items.Contains(oldport))
+                combo.Text = oldport;
+            else if (combo.DropDownStyle == ComboBoxStyle.DropDown && combo.Text != oldport)
+                combo.Text = oldport; // keep a typed port that doesn't exist yet
         }
 
         private void MenuFlightData_Click(object sender, EventArgs e)
