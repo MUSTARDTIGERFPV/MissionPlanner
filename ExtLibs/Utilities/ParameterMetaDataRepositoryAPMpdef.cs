@@ -3,6 +3,7 @@ using System.Configuration;
 using System.IO;
 using System.Xml.Linq;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
@@ -217,52 +218,33 @@ namespace MissionPlanner.Utilities
             {
                 try
                 {
+                    var index = _index.GetValue(_parameterMetaDataXML[vechileType], BuildIndex);
+
+                    // walk the params named vechileKey or nodeKey in document order, as the
+                    // full document scan did, and return the first one that has an answer
                     var vechileKey = vechileType + ":" + nodeKey;
-                    foreach (var paramfile in _parameterMetaDataXML[vechileType].Element("paramfile").Elements())
+                    List<int> a, b = null;
+                    index.ByName.TryGetValue(vechileKey, out a);
+                    if (nodeKey != null)
+                        index.ByName.TryGetValue(nodeKey, out b);
+                    int ia = 0, ib = 0;
+                    while (true)
                     {
-                        foreach (var parameters in paramfile.Elements())
-                        {
-                            if (parameters.HasAttributes)
-                            {
-                                foreach (var param in parameters.Elements())
-                                {
-                                    if (param.Attribute("name").Value == vechileKey ||
-                                        param.Attribute("name").Value == nodeKey)
-                                    {
-                                        if (param.Attribute(metaKey) != null)
-                                        {
-                                            return param.Attribute(metaKey).Value;
-                                        }
-                                        if (metaKey == ParameterMetaDataConstants.Values)
-                                        {
-                                            var ans = "";
-                                            param.Elements("values").Elements().ForEach(a =>
-                                            {
-                                                if (a.Name == "value")
-                                                {
-                                                    var code = a.Attribute("code");
-                                                    var value = a.Value.ToString();
-                                                    ans += String.Format("{0}:{1},", code.Value, value);
-                                                }
-                                            });
-                                            return ans;
-                                        }
-                                        foreach (var xElement in param.Elements())
-                                        {
-                                            if (xElement.Name == "field")
-                                            {
-                                                var name = xElement.Attribute("name");
-                                                if (name != null && name.Value == metaKey)
-                                                {
-                                                    return xElement.Value;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        int next;
+                        if (a != null && ia < a.Count && (b == null || ib >= b.Count || a[ia] < b[ib]))
+                            next = a[ia++];
+                        else if (b != null && ib < b.Count)
+                            next = b[ib++];
+                        else
+                            break;
+
+                        var answer = GetParamMetaData(index.Params[next], metaKey);
+                        if (answer != null)
+                            return answer;
                     }
+
+                    if (index.Incomplete)
+                        log.Error("param metadata for " + vechileType + " is malformed, " + nodeKey + " not found");
                 }
                 catch (Exception ex)
                 {
@@ -271,6 +253,97 @@ namespace MissionPlanner.Utilities
             }
 
             return string.Empty;
+        }
+
+        private class ParamIndex
+        {
+            /// <summary>every param in document order</summary>
+            public List<XElement> Params = new List<XElement>();
+            /// <summary>param name to positions in Params, ascending</summary>
+            public Dictionary<string, List<int>> ByName = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            /// <summary>the document could not be scanned to the end</summary>
+            public bool Incomplete;
+        }
+
+        // built on first use for each loaded XDocument, so it follows every (re)assignment of _parameterMetaDataXML
+        private static readonly ConditionalWeakTable<XDocument, ParamIndex> _index =
+            new ConditionalWeakTable<XDocument, ParamIndex>();
+
+        private static ParamIndex BuildIndex(XDocument doc)
+        {
+            var index = new ParamIndex();
+            var root = doc.Element("paramfile");
+            if (root == null)
+            {
+                index.Incomplete = true;
+                return index;
+            }
+
+            foreach (var paramfile in root.Elements())
+            {
+                foreach (var parameters in paramfile.Elements())
+                {
+                    if (parameters.HasAttributes)
+                    {
+                        foreach (var param in parameters.Elements())
+                        {
+                            var name = param.Attribute("name");
+                            if (name == null)
+                            {
+                                // a linear scan stops (throws) here, so nothing after this can match
+                                index.Incomplete = true;
+                                return index;
+                            }
+
+                            List<int> list;
+                            if (!index.ByName.TryGetValue(name.Value, out list))
+                                index.ByName[name.Value] = list = new List<int>(1);
+                            list.Add(index.Params.Count);
+                            index.Params.Add(param);
+                        }
+                    }
+                }
+            }
+
+            return index;
+        }
+
+        /// <summary>
+        /// The metaKey value of one param, or null if this param does not have it
+        /// </summary>
+        private static string GetParamMetaData(XElement param, string metaKey)
+        {
+            if (param.Attribute(metaKey) != null)
+            {
+                return param.Attribute(metaKey).Value;
+            }
+            if (metaKey == ParameterMetaDataConstants.Values)
+            {
+                var ans = "";
+                param.Elements("values").Elements().ForEach(a =>
+                {
+                    if (a.Name == "value")
+                    {
+                        var code = a.Attribute("code");
+                        var value = a.Value.ToString();
+                        ans += String.Format("{0}:{1},", code.Value, value);
+                    }
+                });
+                return ans;
+            }
+            foreach (var xElement in param.Elements())
+            {
+                if (xElement.Name == "field")
+                {
+                    var name = xElement.Attribute("name");
+                    if (name != null && name.Value == metaKey)
+                    {
+                        return xElement.Value;
+                    }
+                }
+            }
+
+            return null;
         }
     }
 }
