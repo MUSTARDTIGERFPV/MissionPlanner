@@ -30,7 +30,7 @@ namespace MissionPlanner.Utilities
             remove { _onNewImage -= value; }
         }
 
-        private bool threadShouldRun = true;
+        private volatile bool threadShouldRun = true;
         private Thread _backgroundWorker;
 
 #pragma warning disable IDE1006 // Naming Styles
@@ -1279,9 +1279,14 @@ namespace MissionPlanner.Utilities
             // not using appsink
             if (appsink == IntPtr.Zero && running)
             {
-                /* Wait until error or EOS */
-                NativeMethods.gst_bus_timed_pop_filtered(bus, GST_CLOCK_TIME_NONE,
-                    (int)(GstMessageType.GST_MESSAGE_ERROR | GstMessageType.GST_MESSAGE_EOS));
+                /* Wait until error or EOS, or Stop */
+                while (threadShouldRun)
+                {
+                    var msg = NativeMethods.gst_bus_timed_pop_filtered(bus, GST_SECOND / 4,
+                        (int)(GstMessageType.GST_MESSAGE_ERROR | GstMessageType.GST_MESSAGE_EOS));
+                    if (msg != IntPtr.Zero)
+                        break;
+                }
                 threadShouldRun = false;
 
             }
@@ -1293,14 +1298,17 @@ namespace MissionPlanner.Utilities
             }
 
             log.Info("start frame loop gst_app_sink_is_eos");
+            // a short pull timeout lets Stop end the loop promptly
+            int emptypulls = 0;
             while (threadShouldRun && !NativeMethods.gst_app_sink_is_eos(appsink))
             {
                 try
                 {
-                        var sample = NativeMethods.gst_app_sink_try_pull_sample(appsink, GST_SECOND * 5);
+                        var sample = NativeMethods.gst_app_sink_try_pull_sample(appsink, GST_SECOND / 4);
                     if (sample != IntPtr.Zero)
                     {
                         trys = 0;
+                        emptypulls = 0;
                         var caps = NativeMethods.gst_sample_get_caps(sample);
                         var caps_s = NativeMethods.gst_caps_get_structure(caps, 0);
                         NativeMethods.gst_structure_get_int(caps_s, "width", out Width);
@@ -1327,7 +1335,9 @@ namespace MissionPlanner.Utilities
                     }
                     else
                     {
-                        log.Info("failed gst_app_sink_try_pull_sample " + trys + "");
+                        // log once per 5 s without a frame, as before
+                        if (++emptypulls % 20 == 0)
+                            log.Info("failed gst_app_sink_try_pull_sample " + trys + "");
                     }
                 }
                 catch (Exception ex)
@@ -1491,7 +1501,9 @@ namespace MissionPlanner.Utilities
         public void Stop()
         {
             threadShouldRun = false;
-            _backgroundWorker?.Join();
+            // the worker wakes at least every 250 ms; it is a background thread, so do not wait on it for long
+            if (_backgroundWorker != null && !_backgroundWorker.Join(2000))
+                log.Warn("gstreamer thread did not exit");
         }
 
         public static void DownloadGStreamer(Action<int, string> status = null)
