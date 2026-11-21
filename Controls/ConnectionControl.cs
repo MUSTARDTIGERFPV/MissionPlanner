@@ -1,6 +1,7 @@
 ﻿using MissionPlanner.Comms;
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace MissionPlanner.Controls
@@ -14,7 +15,67 @@ namespace MissionPlanner.Controls
             {
                 ShowLinkStats?.Invoke(this, EventArgs.Empty);
             };
+
+            SerialPort.NiceNamesChanged += SerialPort_NiceNamesChanged;
+            // static event, don't let it keep a disposed control alive
+            this.Disposed += (sender, e) => SerialPort.NiceNamesChanged -= SerialPort_NiceNamesChanged;
         }
+
+        private void SerialPort_NiceNamesChanged(object sender, EventArgs e)
+        {
+            // raised on a background thread when port names arrive: repaint so they show
+            try
+            {
+                if (cmb_Connection.IsDisposed || !cmb_Connection.IsHandleCreated)
+                    return;
+                cmb_Connection.BeginInvoke((Action)RepaintConnectionList);
+            }
+            catch (InvalidOperationException)
+            {
+                // handle went away while closing
+            }
+        }
+
+        private void RepaintConnectionList()
+        {
+            if (cmb_Connection.IsDisposed)
+                return;
+
+            cmb_Connection.Invalidate();
+
+            // the open dropdown list is its own window, not repainted by Invalidate
+            if (!MainV2.MONO && cmb_Connection.DroppedDown)
+            {
+                var info = new COMBOBOXINFO();
+                info.cbSize = Marshal.SizeOf(info);
+                if (GetComboBoxInfo(cmb_Connection.Handle, ref info) && info.hwndList != IntPtr.Zero)
+                    InvalidateRect(info.hwndList, IntPtr.Zero, true);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct COMBOBOXINFO
+        {
+            public int cbSize;
+            public RECT rcItem;
+            public RECT rcButton;
+            public int stateButton;
+            public IntPtr hwndCombo;
+            public IntPtr hwndItem;
+            public IntPtr hwndList;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetComboBoxInfo(IntPtr hWnd, ref COMBOBOXINFO pcbi);
+
+        [DllImport("user32.dll")]
+        private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
 
         public event EventHandler ShowLinkStats;
 
@@ -64,7 +125,12 @@ namespace MissionPlanner.Controls
             string text = combo.Items[e.Index].ToString();
             if (!MainV2.MONO)
             {
-                text = text + " " + SerialPort.GetNiceName(text);
+                // cache only: a name lookup is a WMI query, too slow for painting. a missing name is
+                // looked up in the background and NiceNamesChanged repaints the list when it arrives
+                if (SerialPort.TryGetCachedNiceName(text, out var nicename))
+                    text = text + " " + nicename;
+                else
+                    SerialPort.RefreshNiceNames(new[] { text });
             }
 
             e.Graphics.DrawString(text, e.Font,
