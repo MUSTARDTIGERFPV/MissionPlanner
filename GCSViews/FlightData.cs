@@ -137,7 +137,10 @@ namespace MissionPlanner.GCSViews
         double LogPlayBackSpeed = 1.0;
         GMapMarker marker;
 
-        int messagecount;
+        // what the messages tab is currently showing
+        List<(DateTime time, string message)> messageShownList;
+        int messageShownCount;
+        (DateTime time, string message) messageShownLast;
 
         //whether or not the output console has already started
         bool outputwindowstarted;
@@ -4512,24 +4515,32 @@ namespace MissionPlanner.GCSViews
 
         private void Messagetabtimer_Tick(object sender, EventArgs e)
         {
-            var messagetime = MainV2.comPort.MAV.cs.messages.LastOrDefault().time;
-            if (messagecount != messagetime.toUnixTime())
+            try
             {
-                try
+                // the mavlink reader thread appends to this list, only rebuild the text when it changed
+                var messages = MainV2.comPort.MAV.cs.messages;
+                var count = messages.Count;
+                var last = count > 0 ? messages[count - 1] : default;
+
+                if (!ReferenceEquals(messages, messageShownList) || count != messageShownCount ||
+                    last.time != messageShownLast.time || !ReferenceEquals(last.message, messageShownLast.message))
                 {
-                    StringBuilder message = new StringBuilder();
-                    MainV2.comPort.MAV.cs.messages.ForEach(x =>
-                    {
-                        message.Insert(0, x.Item1 + " : " + x.Item2 + "\r\n");
-                    });
+                    var snapshot = messages.ToArray();
+
+                    // newest first
+                    StringBuilder message = new StringBuilder(snapshot.Length * 64);
+                    for (int i = snapshot.Length - 1; i >= 0; i--)
+                        message.Append(snapshot[i].time).Append(" : ").Append(snapshot[i].message).Append("\r\n");
                     txt_messagebox.Text = message.ToString();
 
-                    messagecount = messagetime.toUnixTime();
+                    messageShownList = messages;
+                    messageShownCount = count;
+                    messageShownLast = last;
                 }
-                catch (Exception ex)
-                {
-                    log.Error(ex);
-                }
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex);
             }
 
             coords1.AltUnit = CurrentState.AltUnit;
