@@ -313,22 +313,26 @@ namespace MissionPlanner.Controls
                 }
             }
 
-            ResetTextures(glCurrent);
-
-            if (disposing && invalidateLaterTimer != null)
+            // managed objects are only touched on an explicit Dispose, never from the finalizer thread
+            if (disposing)
             {
-                invalidateLaterTimer.Dispose();
-                invalidateLaterTimer = null;
+                ResetTextures(glCurrent);
+
+                if (invalidateLaterTimer != null)
+                {
+                    invalidateLaterTimer.Dispose();
+                    invalidateLaterTimer = null;
+                }
+
+                if (objGraphics != null)
+                    objGraphics.Dispose();
+                objGraphics = null;
+                objBitmap.Dispose();
+
+                foreach (var icon in iconCache.Values)
+                    icon.Dispose();
+                iconCache.Clear();
             }
-
-            if (objGraphics != null)
-                objGraphics.Dispose();
-            objGraphics = null;
-            objBitmap.Dispose();
-
-            foreach (var icon in iconCache.Values)
-                icon.Dispose();
-            iconCache.Clear();
 
             base.Dispose(disposing);
         }
