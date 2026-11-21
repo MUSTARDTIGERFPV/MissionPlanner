@@ -527,8 +527,13 @@ namespace MissionPlanner.GCSViews
             {
                 try
                 {
-                    gMapControl1.Position = new PointLatLng(Settings.Instance.GetDouble("maplast_lat"),
+                    var lastpos = new PointLatLng(Settings.Instance.GetDouble("maplast_lat"),
                         Settings.Instance.GetDouble("maplast_lng"));
+                    // Deactivate saved where the map is, so on re-entry this is normally where it already is;
+                    // setting it anyway makes the map reload (~60 ms)
+                    if (Math.Abs(gMapControl1.Position.Lat - lastpos.Lat) > 1e-9 ||
+                        Math.Abs(gMapControl1.Position.Lng - lastpos.Lng) > 1e-9)
+                        gMapControl1.Position = lastpos;
                     if (Math.Round(Settings.Instance.GetDouble("maplast_lat"), 1) == 0)
                     {
                         // no zoom in
