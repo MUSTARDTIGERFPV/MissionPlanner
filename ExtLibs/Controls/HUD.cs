@@ -1223,6 +1223,11 @@ namespace MissionPlanner.Controls
         Rectangle vibehitzone = new Rectangle();
         Rectangle prearmhitzone = new Rectangle();
 
+        // the prearm text last measured for prearmhitzone, at which font size, and its width
+        string prearmMeasuredText;
+        int prearmMeasuredFontSize;
+        int prearmMeasuredWidth;
+
         protected override void OnMouseClick(MouseEventArgs e)
         {
             base.OnMouseClick(e);
@@ -2005,47 +2010,59 @@ namespace MissionPlanner.Controls
         {
             if (opengl)
             {
-                float x1 = rectf.X;
-                float y1 = rectf.Y;
-
-                float width = rectf.Width;
-                float height = rectf.Height;
-
-                GL.Begin(PrimitiveType.TriangleFan);
-
                 if (((Type) brushh.GetType()) == typeof(LinearGradientBrush))
                 {
-                    LinearGradientBrush temp = (LinearGradientBrush) brushh;
-                    GL.Color4(temp.LinearColors[0]);
+                    Color[] colors = ((LinearGradientBrush) brushh).LinearColors;
+                    FillRectangleGL(rectf, colors[0], colors[1]);
                 }
                 else
                 {
-                    GL.Color4(((SolidBrush) brushh).Color.R / 255f, ((SolidBrush) brushh).Color.G / 255f,
-                        ((SolidBrush) brushh).Color.B / 255f, ((SolidBrush) brushh).Color.A / 255f);
+                    FillRectangleGL(rectf, ((SolidBrush) brushh).Color, ((SolidBrush) brushh).Color);
                 }
-
-                GL.Vertex2(x1, y1);
-                GL.Vertex2(x1 + width, y1);
-
-                if (((Type) brushh.GetType()) == typeof(LinearGradientBrush))
-                {
-                    LinearGradientBrush temp = (LinearGradientBrush) brushh;
-                    GL.Color4(temp.LinearColors[1]);
-                }
-                else
-                {
-                    GL.Color4(((SolidBrush) brushh).Color.R / 255f, ((SolidBrush) brushh).Color.G / 255f,
-                        ((SolidBrush) brushh).Color.B / 255f, ((SolidBrush) brushh).Color.A / 255f);
-                }
-
-                GL.Vertex2(x1 + width, y1 + height);
-                GL.Vertex2(x1, y1 + height);
-                GL.End();
             }
             else
             {
                 graphicsObjectGDIP.FillRectangle(brushh, rectf);
             }
+        }
+
+        /// <summary>
+        /// Fills rectf with a vertical gradient. OpenGL blends the vertex colours itself, so the
+        /// LinearGradientBrush is only created for GDI+.
+        /// </summary>
+        private void FillRectangleGradient(RectangleF rectf, Color top, Color bottom)
+        {
+            if (opengl)
+            {
+                FillRectangleGL(rectf, top, bottom);
+            }
+            else
+            {
+                using (var linearBrush = new LinearGradientBrush(rectf, top, bottom, LinearGradientMode.Vertical))
+                    graphicsObjectGDIP.FillRectangle(linearBrush, rectf);
+            }
+        }
+
+        private void FillRectangleGL(RectangleF rectf, Color top, Color bottom)
+        {
+            float x1 = rectf.X;
+            float y1 = rectf.Y;
+
+            float width = rectf.Width;
+            float height = rectf.Height;
+
+            GL.Begin(PrimitiveType.TriangleFan);
+
+            GL.Color4(top);
+
+            GL.Vertex2(x1, y1);
+            GL.Vertex2(x1 + width, y1);
+
+            GL.Color4(bottom);
+
+            GL.Vertex2(x1 + width, y1 + height);
+            GL.Vertex2(x1, y1 + height);
+            GL.End();
         }
 
         public void DrawRectangle(Pen penn, RectangleF rect)
@@ -2224,11 +2241,7 @@ namespace MissionPlanner.Controls
 
                     if (bg.Height != 0)
                     {
-                        using (LinearGradientBrush linearBrush = new LinearGradientBrush(
-                            bg, _skyColor1, _skyColor2, LinearGradientMode.Vertical))
-                        {
-                            graphicsObject.FillRectangle(linearBrush, bg);
-                        }
+                        graphicsObject.FillRectangleGradient(bg, _skyColor1, _skyColor2);
                     }
                     // draw ground
 
@@ -2236,13 +2249,7 @@ namespace MissionPlanner.Controls
 
                     if (bg.Height != 0)
                     {
-                        using (
-                            LinearGradientBrush linearBrush = new LinearGradientBrush(
-                                bg, _groundColor1, _groundColor2,
-                                LinearGradientMode.Vertical))
-                        {
-                            graphicsObject.FillRectangle(linearBrush, bg);
-                        }
+                        graphicsObject.FillRectangleGradient(bg, _groundColor1, _groundColor2);
                     }
 
                     //draw centerline
@@ -3426,11 +3433,17 @@ namespace MissionPlanner.Controls
                     {
                         int x = this.Width - 24 * fontsize;
                         if (!prearmstatus) x -= 2 * fontsize;
-                        // Estimate the width of the string for the hit zone
-                        int width;
-                        using (var measurefont = new Font(HUDT.Font, fontsize + 2))
-                            width = TextRenderer.MeasureText(prearmstatus ? HUDT.ReadyToArm : HUDT.NotReadyToArm, measurefont).Width;
-                        prearmhitzone = new Rectangle(x, yPos[0] - 4, width, fontsize * 2);
+                        // Estimate the width of the string for the hit zone. Only measure it again when the text
+                        // or size changes, not every frame.
+                        var prearmtext = prearmstatus ? HUDT.ReadyToArm : HUDT.NotReadyToArm;
+                        if (prearmtext != prearmMeasuredText || fontsize != prearmMeasuredFontSize)
+                        {
+                            using (var measurefont = new Font(HUDT.Font, fontsize + 2))
+                                prearmMeasuredWidth = TextRenderer.MeasureText(prearmtext, measurefont).Width;
+                            prearmMeasuredText = prearmtext;
+                            prearmMeasuredFontSize = fontsize;
+                        }
+                        prearmhitzone = new Rectangle(x, yPos[0] - 4, prearmMeasuredWidth, fontsize * 2);
                     }
 
                     if (prearmstatus)
