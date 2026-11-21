@@ -5639,20 +5639,15 @@ namespace MissionPlanner.GCSViews
                         MainV2.comPort.MAV.cs.UpdateCurrentSettings(
                             bindingSourceGaugesTab.UpdateDataSource(MainV2.comPort.MAV.cs));
                     }
-                    else if (tabControlactions.SelectedTab == tabPagePreFlight)
-                    {
-                        MainV2.comPort.MAV.cs.UpdateCurrentSettings(
-                            bindingSourceGaugesTab.UpdateDataSource(MainV2.comPort.MAV.cs));
-                    }
                     else if (tabControlactions.SelectedTab == tabPayload)
                     {
                         MainV2.comPort.MAV.cs.UpdateCurrentSettings(
                             bindingSourcePayloadTab.UpdateDataSource(MainV2.comPort.MAV.cs));
                     }
                 }
-                else
+                else if (huddropout)
                 {
-                    //Console.WriteLine("Null Binding");
+                    // the hud is in its own window, so it is still shown
                     MainV2.comPort.MAV.cs.UpdateCurrentSettings(
                         bindingSourceHud.UpdateDataSource(MainV2.comPort.MAV.cs));
                 }
