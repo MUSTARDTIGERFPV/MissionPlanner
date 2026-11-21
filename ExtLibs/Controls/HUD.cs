@@ -290,10 +290,8 @@ namespace MissionPlanner.Controls
 
             }
 
-            objBitmap.MakeTransparent();
-
             graphicsObject = this;
-            graphicsObjectGDIP = new GdiGraphics(Graphics.FromImage(objBitmap));
+            CreateBitmapGraphics();
         }
 
         protected override void Dispose(bool disposing)
@@ -316,6 +314,11 @@ namespace MissionPlanner.Controls
             }
 
             ResetTextures(glCurrent);
+
+            if (objGraphics != null)
+                objGraphics.Dispose();
+            objGraphics = null;
+            objBitmap.Dispose();
 
             foreach (var icon in iconCache.Values)
                 icon.Dispose();
@@ -1056,7 +1059,13 @@ namespace MissionPlanner.Controls
         // move these global as they rarely change - reduce GC
         private Font font = new Font(HUDT.Font, 10);
 
-        public Bitmap objBitmap = new Bitmap(1024, 1024, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        // Premultiplied ARGB is what GDI+ blends in, so drawing into it and blitting it to the screen every frame
+        // needs no format conversion. A new bitmap starts fully transparent and doPaint clears it every frame.
+        public Bitmap objBitmap = new Bitmap(1024, 1024, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+
+        // the Graphics graphicsObjectGDIP draws into objBitmap with
+        private Graphics objGraphics;
+
         private int count = 0;
         private DateTime countdate = DateTime.Now;
         private HUD graphicsObject;
@@ -1553,8 +1562,8 @@ namespace MissionPlanner.Controls
 
         // HUDT's image getters go through ResourceManager.GetObject, which decodes the PNG resource into a new
         // Bitmap on every call. The HUD asks for its status icons several times a frame, so each icon is decoded
-        // once per HUD and kept in a copy made by new Bitmap(Image), which renders into a 32bpp ARGB bitmap,
-        // the format DrawImage locks it in
+        // once per HUD and kept in a 32bpp premultiplied ARGB copy, the format GDI+ draws fastest. OpenGL
+        // uploads each icon once (DrawIcon), so the conversion its LockBits does is not a per-frame cost.
         private readonly Dictionary<string, Bitmap> iconCache = new Dictionary<string, Bitmap>();
 
         private Bitmap GetIcon(string name)
@@ -1563,7 +1572,14 @@ namespace MissionPlanner.Controls
             if (!iconCache.TryGetValue(name, out icon))
             {
                 using (var loaded = (Image) HUDT.ResourceManager.GetObject(name, HUDT.Culture))
-                    icon = new Bitmap(loaded);
+                {
+                    icon = new Bitmap(loaded.Width, loaded.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                    using (var g = Graphics.FromImage(icon))
+                    {
+                        g.CompositingMode = CompositingMode.SourceCopy;
+                        g.DrawImage(loaded, new Rectangle(0, 0, loaded.Width, loaded.Height));
+                    }
+                }
                 iconCache[name] = icon;
             }
 
@@ -2095,9 +2111,10 @@ namespace MissionPlanner.Controls
                 if (graphicsObjectGDIP == null || !opengl && !directPaint &&
                     (objBitmap.Width != this.Width || objBitmap.Height != this.Height))
                 {
-                    objBitmap = new Bitmap(this.Width, this.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                    objBitmap.MakeTransparent();
-                    graphicsObjectGDIP = new GdiGraphics(Graphics.FromImage(objBitmap));
+                    var oldBitmap = objBitmap;
+                    objBitmap = new Bitmap(this.Width, this.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                    CreateBitmapGraphics();
+                    oldBitmap.Dispose();
 
                     graphicsObjectGDIP.SmoothingMode = SmoothingMode.HighSpeed;
                     graphicsObjectGDIP.InterpolationMode = InterpolationMode.NearestNeighbor;
@@ -3774,17 +3791,17 @@ namespace MissionPlanner.Controls
 
                     charDict[charid] = new character()
                     {
+                        // premultiplied, like objBitmap, so drawing a glyph needs no conversion
                         bitmap = new Bitmap(NextPowerOf2(larger), NextPowerOf2(larger),
-                            System.Drawing.Imaging.PixelFormat.Format32bppArgb),
+                            System.Drawing.Imaging.PixelFormat.Format32bppPArgb),
                         size = (int) fontsize,
                         pth = pth
                     };
 
-                    charDict[charid].bitmap.MakeTransparent(Color.Transparent);
-
                     // create bitmap
                     using (var gfx = Graphics.FromImage(charDict[charid].bitmap))
                     {
+                        gfx.Clear(Color.Transparent);
                         gfx.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
                         gfx.DrawPath(this._p, pth);
@@ -3919,6 +3936,18 @@ namespace MissionPlanner.Controls
             imageTextures.Clear();
         }
 
+        /// <summary>
+        /// Points graphicsObjectGDIP at objBitmap and releases the Graphics that drew into the previous one.
+        /// </summary>
+        private void CreateBitmapGraphics()
+        {
+            var old = objGraphics;
+            objGraphics = Graphics.FromImage(objBitmap);
+            graphicsObjectGDIP = new GdiGraphics(objGraphics);
+            if (old != null)
+                old.Dispose();
+        }
+
         public void doResize()
         {
             OnResize(EventArgs.Empty);
@@ -3955,7 +3984,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
-            graphicsObjectGDIP = new GdiGraphics(Graphics.FromImage(objBitmap));
+            CreateBitmapGraphics();
 
             try
             {
