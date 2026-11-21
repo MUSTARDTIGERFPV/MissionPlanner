@@ -36,6 +36,14 @@ namespace MissionPlanner.Utilities
 
         static bool run = false;
         static Thread thisthread;
+        /// <summary>
+        /// The connection the reader thread is using, so Stop can close it to unblock a connect or read
+        /// </summary>
+        static volatile TcpClient client;
+        /// <summary>
+        /// Set by Stop to cut the reader thread's sleeps short
+        /// </summary>
+        static readonly ManualResetEvent stopEvent = new ManualResetEvent(false);
 
         /// <summary>
         /// The server to connect to for ADS-B data. If this is set to a URL, the API will be used, otherwise if it's an IP or hostname, a direct connection will be attempted.
@@ -80,6 +88,8 @@ namespace MissionPlanner.Utilities
 
         public adsb()
         {
+            stopEvent.Reset();
+
             thisthread = new Thread(TryConnect);
 
             thisthread.Name = "ADSB reader thread";
@@ -93,14 +103,29 @@ namespace MissionPlanner.Utilities
         {
             log.Info("adsb stop");
             run = false;
+            stopEvent.Set();
+
+            // closing the socket unblocks a connect or read in progress
+            try
+            {
+                client?.Close();
+            }
+            catch { }
 
             if (thisthread != null)
             {
-                try { 
-                    thisthread.Abort();
-                    thisthread.Join();
-                    thisthread = null;
-                } catch { }
+                try
+                {
+                    // the thread is a background thread, so never wait on it for long
+                    if (!thisthread.Join(1000))
+                    {
+                        log.Warn("adsb thread did not exit");
+                        thisthread.Abort();
+                    }
+                }
+                catch { }
+
+                thisthread = null;
             }
 
             log.Info("adsb stopped");
@@ -119,6 +144,8 @@ namespace MissionPlanner.Utilities
                     {
                         using (TcpClient cl = new TcpClient())
                         {
+                            client = cl;
+
                             cl.Connect(server, serverport);
 
                             log.Info("Connected " + server + ":" + serverport);
@@ -138,14 +165,21 @@ namespace MissionPlanner.Utilities
                         string url = "{0}/v2/point/{1}/{2}/{3}";
                         var delay = API_LOOP_DELAY_MILLISECONDS;
 
-                        while (true)
+                        while (run)
                         {
                             // Store start time
                             var timer = Stopwatch.StartNew();
 
                             string formattedUrl = string.Format(CultureInfo.InvariantCulture, url, server, CurrentPosition.Lat, CurrentPosition.Lng, httpRequestRadius);
                             var t = Download.GetAsyncWithStatus(formattedUrl);
-                            t.Wait();
+                            while (!t.Wait(250))
+                            {
+                                if (!run)
+                                    break;
+                            }
+
+                            if (!run)
+                                break;
 
                             // Check for long running requests
                             if (timer.ElapsedMilliseconds > 5000)
@@ -205,7 +239,7 @@ namespace MissionPlanner.Utilities
                             var elapsed = timer.ElapsedMilliseconds;
                             if (elapsed < delay)
                             {
-                                Thread.Sleep(delay - (int)elapsed);
+                                stopEvent.WaitOne(delay - (int)elapsed);
                             }
                         }
                     }
@@ -220,6 +254,8 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
+                        client = cl;
+
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 30003, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
                         if (cl.Connected)
@@ -240,6 +276,8 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
+                        client = cl;
+
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 30002, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
                         if (cl.Connected)
@@ -261,6 +299,8 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
+                        client = cl;
+
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 31004, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
                         if (cl.Connected)
@@ -281,6 +321,8 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
+                        client = cl;
+
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 31001, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
                         if (cl.Connected)
@@ -302,6 +344,8 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
+                        client = cl;
+
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 47806, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
                         if (cl.Connected)
@@ -320,8 +364,10 @@ namespace MissionPlanner.Utilities
 
                 // cleanup any sockets that might be outstanding.
                 GC.Collect();
-                System.Threading.Thread.Sleep(2500);
+                stopEvent.WaitOne(2500);
             }
+
+            client = null;
 
             log.Info("adsb thread exit");
         }
