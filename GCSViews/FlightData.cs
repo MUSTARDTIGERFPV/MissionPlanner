@@ -1409,21 +1409,23 @@ namespace MissionPlanner.GCSViews
             MatLabForms.ProcessLog();
         }
 
-        private void BUT_mountmode_Click(object sender, EventArgs e)
+        private async void BUT_mountmode_Click(object sender, EventArgs e)
         {
             try
             {
+                var port = MainV2.comPort;
+                var mode = (int) CMB_mountmode.SelectedValue;
                 if (MainV2.comPort.MAV.param.ContainsKey("MNT_MODE"))
                 {
-                    MainV2.comPort.setParam(MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                        "MNT_MODE", (int) CMB_mountmode.SelectedValue);
+                    await VehicleRequest.RunAsync(() => port.setParam(port.sysidcurrent, (byte) port.compidcurrent,
+                        "MNT_MODE", mode));
                 }
                 else
                 {
                     // copter 3.3 acks with an error, but is ok
-                    MainV2.comPort.doCommand(MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
+                    await VehicleRequest.RunAsync(() => port.doCommand(port.sysidcurrent, (byte) port.compidcurrent,
                         MAVLink.MAV_CMD.DO_MOUNT_CONTROL, 0, 0, 0, 0, 0, 0,
-                        (int) CMB_mountmode.SelectedValue);
+                        mode));
                 }
             }
             catch
@@ -1675,13 +1677,17 @@ namespace MissionPlanner.GCSViews
             MainV2.comPort.setMode(CMB_modes.Text);
         }
 
-        private void BUT_setwp_Click(object sender, EventArgs e)
+        private async void BUT_setwp_Click(object sender, EventArgs e)
         {
             try
             {
                 ((Control) sender).Enabled = false;
-                MainV2.comPort.setWPCurrent(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid,
-                    (ushort) CMB_setwp.SelectedIndex); // set nav to
+                var port = MainV2.comPort;
+                var sysid = port.MAV.sysid;
+                var compid = port.MAV.compid;
+                var index = (ushort) CMB_setwp.SelectedIndex;
+                await VehicleRequest.RunAsync(() => port.setWPCurrent(sysid, compid,
+                    index)); // set nav to
             }
             catch
             {
@@ -1697,7 +1703,7 @@ namespace MissionPlanner.GCSViews
             lbl_playbackspeed.Text = "x " + LogPlayBackSpeed;
         }
 
-        private void BUTactiondo_Click(object sender, EventArgs e)
+        private async void BUTactiondo_Click(object sender, EventArgs e)
         {
             // Custom action handling. Only actions registered by a plugin are in the
             // dictionary, so an indexer lookup would throw for every built in action.
@@ -1714,12 +1720,16 @@ namespace MissionPlanner.GCSViews
                 return;
             }
 
+            // the requests below wait for the vehicle off the UI thread, while user input is ignored;
+            // the prompt stays on the UI thread
+            var port = MainV2.comPort;
+
             if (CMB_action.Text == actions.Format_SD_Card.ToString())
             {
                  try
                 {
                     //p1 and p2 must be 1 to initate SD card format
-                    MainV2.comPort.doCommandInt(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid, MAVLink.MAV_CMD.STORAGE_FORMAT, 1, 1, 0, 0, 0, 0, 0);
+                    await VehicleRequest.RunAsync(() => port.doCommandInt(port.MAV.sysid, port.MAV.compid, MAVLink.MAV_CMD.STORAGE_FORMAT, 1, 1, 0, 0, 0, 0, 0));
                     return;
                 }
                 catch
@@ -1734,7 +1744,7 @@ namespace MissionPlanner.GCSViews
             {
                 if (CMB_action.Text == actions.Trigger_Camera.ToString())
                 {
-                    MainV2.comPort.setDigicamControl(true);
+                    await VehicleRequest.RunAsync(() => port.setDigicamControl(true));
                     return;
                 }
             }
@@ -1748,7 +1758,7 @@ namespace MissionPlanner.GCSViews
             {
                 try
                 {
-                    MainV2.comPort.doCommandInt(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid, MAVLink.MAV_CMD.SCRIPTING, (int)MAVLink.SCRIPTING_CMD.STOP_AND_RESTART, 0, 0, 0, 0, 0, 0);
+                    await VehicleRequest.RunAsync(() => port.doCommandInt(port.MAV.sysid, port.MAV.compid, MAVLink.MAV_CMD.SCRIPTING, (int)MAVLink.SCRIPTING_CMD.STOP_AND_RESTART, 0, 0, 0, 0, 0, 0));
                     return;
                 }
                 catch
@@ -1762,7 +1772,7 @@ namespace MissionPlanner.GCSViews
             {
                 try
                 {
-                    MainV2.comPort.doCommandInt(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid, MAVLink.MAV_CMD.SCRIPTING, (int)MAVLink.SCRIPTING_CMD.STOP, 0, 0, 0, 0, 0, 0);
+                    await VehicleRequest.RunAsync(() => port.doCommandInt(port.MAV.sysid, port.MAV.compid, MAVLink.MAV_CMD.SCRIPTING, (int)MAVLink.SCRIPTING_CMD.STOP, 0, 0, 0, 0, 0, 0));
                     return;
                 }
                 catch
@@ -1813,15 +1823,15 @@ namespace MissionPlanner.GCSViews
 
                     if (CMB_action.Text == actions.Terminate_Flight.ToString())
                     {
-                        MainV2.comPort.doCommand(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid, MAVLink.MAV_CMD.DO_FLIGHTTERMINATION, 1.0f, 0, 0, 0, 0, 0, 0);
+                        await VehicleRequest.RunAsync(() => port.doCommand(port.MAV.sysid, port.MAV.compid, MAVLink.MAV_CMD.DO_FLIGHTTERMINATION, 1.0f, 0, 0, 0, 0, 0, 0));
                         ((Control)sender).Enabled = true;
                         return;
                     }
 
                     if (CMB_action.Text == actions.Parachute_Release.ToString())
                     {
-                        if (!MainV2.comPort.doCommand(MAVLink.MAV_CMD.DO_PARACHUTE,
-                                (float) MAVLink.PARACHUTE_ACTION.PARACHUTE_RELEASE, 0, 0, 0, 0, 0, 0))
+                        if (!await VehicleRequest.RunAsync(() => port.doCommand(MAVLink.MAV_CMD.DO_PARACHUTE,
+                                (float) MAVLink.PARACHUTE_ACTION.PARACHUTE_RELEASE, 0, 0, 0, 0, 0, 0)))
                         {
                             CustomMessageBox.Show(Strings.CommandFailed + " " + MAVLink.MAV_CMD.DO_PARACHUTE, Strings.ERROR);
                         }
@@ -1831,27 +1841,27 @@ namespace MissionPlanner.GCSViews
 
                     if (CMB_action.Text == actions.Preflight_Reboot_Shutdown.ToString())
                     {
-                        MainV2.comPort.doReboot();
+                        await VehicleRequest.RunAsync(() => port.doReboot());
                         ((Control) sender).Enabled = true;
                         return;
                     }
                     if (CMB_action.Text == actions.Reboot_Mass_Storage.ToString())
                     {
                         const float rebootToMassStorage = 5f; // ArduPilot REBOOT_TO_MASS_STORAGE action
-                        MainV2.comPort.doCommand(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid,
-                            MAVLink.MAV_CMD.PREFLIGHT_REBOOT_SHUTDOWN, rebootToMassStorage, 0, 0, 0, 0, 0, 0);
+                        await VehicleRequest.RunAsync(() => port.doCommand(port.MAV.sysid, port.MAV.compid,
+                            MAVLink.MAV_CMD.PREFLIGHT_REBOOT_SHUTDOWN, rebootToMassStorage, 0, 0, 0, 0, 0, 0));
                         ((Control) sender).Enabled = true;
                         return;
                     }
                     if (CMB_action.Text == actions.HighLatency_Enable.ToString())
                     {
-                        MainV2.comPort.doHighLatency(true);
+                        await VehicleRequest.RunAsync(() => port.doHighLatency(true));
                         ((Control)sender).Enabled = true;
                         return;
                     }
                     if (CMB_action.Text == actions.HighLatency_Disable.ToString())
                     {
-                        MainV2.comPort.doHighLatency(false);
+                        await VehicleRequest.RunAsync(() => port.doHighLatency(false));
                         ((Control)sender).Enabled = true;
                         return;
                     }
@@ -1870,13 +1880,13 @@ namespace MissionPlanner.GCSViews
                     }
                     if (CMB_action.Text == actions.Engine_Start.ToString())
                     {
-                        MainV2.comPort.doEngineControl(MainV2.comPort.sysidcurrent, (byte)MainV2.comPort.compidcurrent, true);
+                        await VehicleRequest.RunAsync(() => port.doEngineControl(port.sysidcurrent, (byte)port.compidcurrent, true));
                         ((Control)sender).Enabled = true;
                         return;
                     }
                     if (CMB_action.Text == actions.Engine_Stop.ToString())
                     {
-                        MainV2.comPort.doEngineControl(MainV2.comPort.sysidcurrent, (byte)MainV2.comPort.compidcurrent, false);
+                        await VehicleRequest.RunAsync(() => port.doEngineControl(port.sysidcurrent, (byte)port.compidcurrent, false));
                         ((Control)sender).Enabled = true;
                         return;
                     }
@@ -1899,7 +1909,7 @@ namespace MissionPlanner.GCSViews
                             "DO_START_" + CMB_action.Text.ToUpper(CultureInfo.InvariantCulture));
                     }
 
-                    if (MainV2.comPort.doCommand(cmd, param1, param2, param3, 0, 0, 0, 0))
+                    if (await VehicleRequest.RunAsync(() => port.doCommand(cmd, param1, param2, param3, 0, 0, 0, 0)))
                     {
 
                     }
@@ -1917,13 +1927,16 @@ namespace MissionPlanner.GCSViews
             }
         }
 
-        private void BUTrestartmission_Click(object sender, EventArgs e)
+        private async void BUTrestartmission_Click(object sender, EventArgs e)
         {
             try
             {
                 ((Control) sender).Enabled = false;
 
-                MainV2.comPort.setWPCurrent(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid, 0); // set nav to
+                var port = MainV2.comPort;
+                var sysid = port.MAV.sysid;
+                var compid = port.MAV.compid;
+                await VehicleRequest.RunAsync(() => port.setWPCurrent(sysid, compid, 0)); // set nav to
             }
             catch
             {
