@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -18,10 +20,16 @@ namespace MissionPlanner.Utilities
     /// Everything else keeps running, so the UI work that background threads post to the UI thread
     /// (the FlightData main loop's BeginInvokes, timers, painting) keeps the HUD and map live.
     ///
+    /// Requests are also run one at a time, in the order they were asked for: each reads its replies
+    /// off the link itself, so two at once would take each other's acks. One can still be asked for
+    /// while another runs (a step of a longer sequence, a connect started by a background thread);
+    /// it waits for the one before, with input ignored meanwhile.
+    ///
     /// Only mouse button, mouse wheel and keyboard messages are dropped; paint, timer, mouse move
-    /// and hover messages pass. The one button release that passes is to a control holding the mouse
-    /// capture: that press started before the request (a Ctrl+click on the map starts one on mouse
-    /// down), and dropping its release would leave the control dragging. Clicks on the window frame (including the close box) are dropped
+    /// and hover messages pass. The one button release that passes is to the window that held the
+    /// mouse capture when input was first blocked, while it still holds it: that press started before
+    /// the request (a Ctrl+click on the map starts one on mouse down), and dropping its release would
+    /// leave the window dragging. Clicks on the window frame (including the close box) are dropped
     /// too, like when the window was frozen. A close requested from outside the message loop (the
     /// taskbar, the window manager on Mono) is a sent message that no filter can see, and was
     /// queued until the request ended before; now the window can close while a request is still
@@ -36,15 +44,26 @@ namespace MissionPlanner.Utilities
     public static class VehicleRequest
     {
         private static readonly InputBlocker blocker = new InputBlocker();
+        private static readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
         private static int depth;
         private static bool waitCursorWas;
+        // the window that held the mouse capture when input was blocked, until it gets its button release
+        private static IntPtr captureWindow;
 
         public static async Task<T> RunAsync<T>(Func<T> request)
         {
             Begin();
             try
             {
-                return await Task.Run(request);
+                await gate.WaitAsync();
+                try
+                {
+                    return await Task.Run(request);
+                }
+                finally
+                {
+                    gate.Release();
+                }
             }
             finally
             {
@@ -75,6 +94,7 @@ namespace MissionPlanner.Utilities
         {
             if (depth++ == 0)
             {
+                captureWindow = GetCaptureWindow();
                 Application.AddMessageFilter(blocker);
                 try
                 {
@@ -93,6 +113,7 @@ namespace MissionPlanner.Utilities
             if (--depth == 0)
             {
                 Application.RemoveMessageFilter(blocker);
+                captureWindow = IntPtr.Zero;
                 try
                 {
                     Application.UseWaitCursor = waitCursorWas;
@@ -101,6 +122,67 @@ namespace MissionPlanner.Utilities
                 {
                     // only cosmetic
                 }
+            }
+        }
+
+        private static readonly bool isWindows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetCapture();
+
+        /// <summary>
+        /// The window holding the mouse capture: a native window as well as a control on Windows, the
+        /// control that says it holds it elsewhere (Mono has no user32).
+        /// </summary>
+        private static IntPtr GetCaptureWindow()
+        {
+            try
+            {
+                if (isWindows)
+                    return GetCapture();
+
+                foreach (Form form in Application.OpenForms)
+                {
+                    var control = FindCapture(form);
+                    if (control != null)
+                        return control.Handle;
+                }
+            }
+            catch
+            {
+            }
+
+            return IntPtr.Zero;
+        }
+
+        private static Control FindCapture(Control control)
+        {
+            if (control.IsHandleCreated && control.Capture)
+                return control;
+
+            foreach (Control child in control.Controls)
+            {
+                var found = FindCapture(child);
+                if (found != null)
+                    return found;
+            }
+
+            return null;
+        }
+
+        private static bool HoldsCapture(IntPtr hwnd)
+        {
+            try
+            {
+                if (isWindows)
+                    return GetCapture() == hwnd;
+
+                var control = Control.FromHandle(hwnd);
+                return control != null && control.Capture;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -152,8 +234,14 @@ namespace MissionPlanner.Utilities
                     case 0x0205:
                     case 0x0208:
                     case 0x020C:
-                        var control = Control.FromHandle(m.HWnd);
-                        return control == null || !control.Capture;
+                        if (captureWindow != IntPtr.Zero && m.HWnd == captureWindow && HoldsCapture(m.HWnd))
+                        {
+                            // only its one release
+                            captureWindow = IntPtr.Zero;
+                            return false;
+                        }
+
+                        return true;
                     default:
                         return false;
                 }
