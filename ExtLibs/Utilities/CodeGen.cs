@@ -6,6 +6,7 @@ using System;
 using System.CodeDom;
 using System.CodeDom.Compiler;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -27,6 +28,36 @@ namespace MissionPlanner
         // no longer has (MissingMethodException when that code runs)
         static readonly string BuildId = (Assembly.GetEntryAssembly() ?? typeof(CodeGenRoslyn).Assembly)
             .ManifestModule.ModuleVersionId.ToString();
+
+        // metadata references by assembly path. Plugins are compiled one after another against
+        // much the same set of loaded assemblies, so read each one's metadata once per run
+        static readonly Dictionary<string, MetadataReference> referenceCache =
+            new Dictionary<string, MetadataReference>();
+
+        static MetadataReference GetReference(string location)
+        {
+            if (location == null)
+                return null;
+
+            lock (referenceCache)
+            {
+                MetadataReference reference;
+                if (referenceCache.TryGetValue(location, out reference))
+                    return reference;
+
+                try
+                {
+                    if (location != "" && File.Exists(location))
+                        reference = AssemblyMetadata.CreateFromFile(location).GetReference();
+                }
+                catch
+                {
+                }
+
+                referenceCache[location] = reference;
+                return reference;
+            }
+        }
 
         public static Assembly BuildCode(string filepath)
         {
@@ -67,19 +98,7 @@ namespace MissionPlanner
                 .Select(a => a.Location);
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 refFiles = refs.Where(a => !a.IsDynamic).Select(a => a.Location);
-            var refmeta = refFiles.Select(a =>
-            {
-                try
-                {
-                    if (a == "" || !File.Exists(a))
-                        return null;
-                    return AssemblyMetadata.CreateFromFile(a).GetReference();
-                }
-                catch
-                {
-                    return null;
-                }
-            }).Where(a => a != null).ToArray();
+            var refmeta = refFiles.Select(GetReference).Where(a => a != null).ToArray();
 
             CSharpCompilation compilation = CSharpCompilation.Create(
                 assemblyName,
