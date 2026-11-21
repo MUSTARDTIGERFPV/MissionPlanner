@@ -1025,14 +1025,15 @@ namespace MissionPlanner.GCSViews
             BUT_abort_script.Visible = false;
         }
 
-        private void BUT_abortland_Click(object sender, EventArgs e)
+        private async void BUT_abortland_Click(object sender, EventArgs e)
         {
             if (!MainV2.comPort.BaseStream.IsOpen)
                 return;
 
             try
             {
-                MainV2.comPort.doAbortLand();
+                var port = MainV2.comPort;
+                await VehicleRequest.RunAsync(() => port.doAbortLand());
             }
             catch
             {
@@ -2967,7 +2968,19 @@ namespace MissionPlanner.GCSViews
             }
         }
 
-        private void flyToHereAltToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void flyToHereAltToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                await FlyToHereAlt();
+            }
+            catch (Exception ex)
+            {
+                CustomMessageBox.Show(Strings.CommandFailed + ex.Message, Strings.ERROR);
+            }
+        }
+
+        private async Task FlyToHereAlt()
         {
             string alt = "100";
             MAVLink.MAV_FRAME frame = MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT;
@@ -3004,13 +3017,17 @@ namespace MissionPlanner.GCSViews
 
             if (MainV2.comPort.MAV.cs.mode == "Guided")
             {
-                MainV2.comPort.setGuidedModeWP(new Locationwp
+                var port = MainV2.comPort;
+                var sysid = port.MAV.sysid;
+                var compid = port.MAV.compid;
+                var wp = new Locationwp
                 {
                     alt = MainV2.comPort.MAV.GuidedMode.z,
                     lat = MainV2.comPort.MAV.GuidedMode.x / 1e7,
                     lng = MainV2.comPort.MAV.GuidedMode.y / 1e7,
                     frame = (byte)frame
-                });
+                };
+                await VehicleRequest.RunAsync(() => port.setGuidedModeWP(sysid, compid, wp));
             }
         }
 
@@ -3150,7 +3167,7 @@ namespace MissionPlanner.GCSViews
             gMapControl1.Zoom = gMapControl1.Zoom + 0.01;
         }
 
-        private void goHereToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void goHereToolStripMenuItem_Click(object sender, EventArgs e)
         {
             if (!MainV2.comPort.BaseStream.IsOpen)
             {
@@ -3160,7 +3177,14 @@ namespace MissionPlanner.GCSViews
 
             if (MainV2.comPort.MAV.GuidedMode.z == 0f)
             {
-                flyToHereAltToolStripMenuItem_Click(null, null);
+                try
+                {
+                    await FlyToHereAlt();
+                }
+                catch (Exception ex)
+                {
+                    CustomMessageBox.Show(Strings.CommandFailed + ex.Message, Strings.ERROR);
+                }
 
                 if (MainV2.comPort.MAV.GuidedMode.z == 0f)
                     return;
@@ -3182,7 +3206,10 @@ namespace MissionPlanner.GCSViews
 
             try
             {
-                MainV2.comPort.setGuidedModeWP(gotohere);
+                var port = MainV2.comPort;
+                var sysid = port.MAV.sysid;
+                var compid = port.MAV.compid;
+                await VehicleRequest.RunAsync(() => port.setGuidedModeWP(sysid, compid, gotohere));
             }
             catch (Exception ex)
             {
@@ -4573,12 +4600,16 @@ namespace MissionPlanner.GCSViews
             coords1.AltUnit = CurrentState.AltUnit;
         }
 
-        private void modifyandSetAlt_Click(object sender, EventArgs e)
+        private async void modifyandSetAlt_Click(object sender, EventArgs e)
         {
             int newalt = (int) modifyandSetAlt.Value;
             try
             {
-                MainV2.comPort.setNewWPAlt(new Locationwp {alt = newalt / CurrentState.multiplieralt});
+                var port = MainV2.comPort;
+                var sysid = port.sysidcurrent;
+                var compid = (byte) port.compidcurrent;
+                var wp = new Locationwp {alt = newalt / CurrentState.multiplieralt};
+                await VehicleRequest.RunAsync(() => port.setNewWPAlt(sysid, compid, wp));
             }
             catch
             {
@@ -4586,13 +4617,15 @@ namespace MissionPlanner.GCSViews
             }
         }
 
-        private void modifyandSetLoiterRad_Click(object sender, EventArgs e)
+        private async void modifyandSetLoiterRad_Click(object sender, EventArgs e)
         {
             int newrad = (int) modifyandSetLoiterRad.Value;
 
             try
             {
-                MainV2.comPort.setParam(new[] {"LOITER_RAD", "WP_LOITER_RAD"}, newrad / CurrentState.multiplierdist);
+                var port = MainV2.comPort;
+                var value = newrad / CurrentState.multiplierdist;
+                await VehicleRequest.RunAsync(() => port.setParam(new[] {"LOITER_RAD", "WP_LOITER_RAD"}, value));
             }
             catch
             {
@@ -4652,7 +4685,7 @@ namespace MissionPlanner.GCSViews
             POI.UpdateOverlay(poioverlay);
         }
 
-        private void PointCameraCoordsToolStripMenuItem1_Click(object sender, EventArgs e)
+        private async void PointCameraCoordsToolStripMenuItem1_Click(object sender, EventArgs e)
         {
             var location = "";
             InputBox.Show("Enter Coords", "Please enter the coords 'lat;long;alt(abs)' or 'lat;long'", ref location);
@@ -4665,9 +4698,7 @@ namespace MissionPlanner.GCSViews
                 var lng = float.Parse(split[1], CultureInfo.InvariantCulture);
                 var alt = float.Parse(split[2], CultureInfo.InvariantCulture);
 
-                MainV2.comPort.doCommandInt(MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                    MAVLink.MAV_CMD.DO_SET_ROI, 0, 0, 0, 0, (int) (lat * 1e7),
-                    (int) (lng * 1e7),  ((alt / CurrentState.multiplieralt) ));
+                await PointCamera(lat, lng, alt / CurrentState.multiplieralt);
             }
             else if (split.Length == 2)
             {
@@ -4675,9 +4706,7 @@ namespace MissionPlanner.GCSViews
                 var lng = float.Parse(split[1], CultureInfo.InvariantCulture);
                 var alt = (float)srtm.getAltitude(lat, lng).alt;
 
-                MainV2.comPort.doCommandInt(MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                    MAVLink.MAV_CMD.DO_SET_ROI, 0, 0, 0, 0, (int) (lat * 1e7),
-                    (int) (lng * 1e7),  ((alt)));
+                await PointCamera(lat, lng, alt);
             }
             else
             {
@@ -4685,7 +4714,24 @@ namespace MissionPlanner.GCSViews
             }
         }
 
-        private void pointCameraHereToolStripMenuItem_Click(object sender, EventArgs e)
+        private async Task PointCamera(float lat, float lng, float alt)
+        {
+            try
+            {
+                var port = MainV2.comPort;
+                var sysid = port.sysidcurrent;
+                var compid = (byte) port.compidcurrent;
+                await VehicleRequest.RunAsync(() => port.doCommandInt(sysid, compid,
+                    MAVLink.MAV_CMD.DO_SET_ROI, 0, 0, 0, 0, (int) (lat * 1e7),
+                    (int) (lng * 1e7),  alt));
+            }
+            catch
+            {
+                CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
+            }
+        }
+
+        private async void pointCameraHereToolStripMenuItem_Click(object sender, EventArgs e)
         {
             if (!MainV2.comPort.BaseStream.IsOpen)
             {
@@ -4712,10 +4758,15 @@ namespace MissionPlanner.GCSViews
 
             try
             {
-                MainV2.comPort.doCommandInt(MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                    MAVLink.MAV_CMD.DO_SET_ROI, 0, 0, 0, 0, (int) (MouseDownStart.Lat * 1e7),
-                    (int) (MouseDownStart.Lng * 1e7),  ((intalt / CurrentState.multiplieralt)),
-                    frame: MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT);
+                var port = MainV2.comPort;
+                var sysid = port.sysidcurrent;
+                var compid = (byte) port.compidcurrent;
+                var target = MouseDownStart;
+                var targetalt = intalt / CurrentState.multiplieralt;
+                await VehicleRequest.RunAsync(() => port.doCommandInt(sysid, compid,
+                    MAVLink.MAV_CMD.DO_SET_ROI, 0, 0, 0, 0, (int) (target.Lat * 1e7),
+                    (int) (target.Lng * 1e7),  targetalt,
+                    frame: MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT));
             }
             catch
             {
@@ -5040,19 +5091,30 @@ namespace MissionPlanner.GCSViews
                         return;
                     }
 
-                    if (CustomMessageBox.Show(
+                    var port = MainV2.comPort;
+                    var sysid = port.sysidcurrent;
+                    var compid = (byte) port.compidcurrent;
+
+                    var sethome = CustomMessageBox.Show(
                             "This will reset the onboard home position (effects RTL etc). Are you Sure?",
                             "Are you sure?", CustomMessageBox.MessageBoxButtons.OKCancel) ==
-                        CustomMessageBox.DialogResult.OK)
-                    {
-                        MainV2.comPort.doCommandInt(MainV2.comPort.sysidcurrent,
-                            (byte) MainV2.comPort.compidcurrent,
-                            MAVLink.MAV_CMD.DO_SET_HOME, 0, 0, 0, 0, (int)(MouseDownStart.Lat * 1e7),
-                            (int)(MouseDownStart.Lng * 1e7), (float)(alt.alt));
-                    }
+                        CustomMessageBox.DialogResult.OK;
+                    var target = MouseDownStart;
 
-                    await MainV2.comPort.getHomePositionAsync(MainV2.comPort.sysidcurrent,
-                        (byte) MainV2.comPort.compidcurrent);
+                    // one request, so nothing can come between setting home and reading it back
+                    await VehicleRequest.RunAsync(() =>
+                    {
+                        if (sethome)
+                        {
+                            port.doCommandInt(sysid,
+                                compid,
+                                MAVLink.MAV_CMD.DO_SET_HOME, 0, 0, 0, 0, (int)(target.Lat * 1e7),
+                                (int)(target.Lng * 1e7), (float)(alt.alt));
+                        }
+
+                        port.getHomePositionAsync(sysid,
+                            compid).AwaitSync();
+                    });
                 }
                 catch
                 {
@@ -5464,7 +5526,7 @@ namespace MissionPlanner.GCSViews
         {
         }
 
-        private void takeOffToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void takeOffToolStripMenuItem_Click(object sender, EventArgs e)
         {
             if (MainV2.comPort.BaseStream.IsOpen)
             {
@@ -5477,12 +5539,17 @@ namespace MissionPlanner.GCSViews
 
                 Settings.Instance["takeoff_alt"] = altf.ToString();
 
-                MainV2.comPort.setMode("GUIDED");
+                var port = MainV2.comPort;
+                var sysid = port.sysidcurrent;
+                var compid = (byte) port.compidcurrent;
+
+                // the mode change is sent without waiting for an ack, as before
+                port.setMode(sysid, compid, "GUIDED");
 
                 try
                 {
-                    MainV2.comPort.doCommand(MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                        MAVLink.MAV_CMD.TAKEOFF, 0, 0, 0, 0, 0, 0, altf);
+                    await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid,
+                        MAVLink.MAV_CMD.TAKEOFF, 0, 0, 0, 0, 0, 0, altf));
                 }
                 catch
                 {
@@ -6112,7 +6179,7 @@ namespace MissionPlanner.GCSViews
             new Georefimage().Show();
         }
 
-        private void flyToCoordsToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void flyToCoordsToolStripMenuItem_Click(object sender, EventArgs e)
         {
             var location = "";
             InputBox.Show("Enter Fly To Coords", "Please enter the coords 'lat;long;alt' or 'lat;long'", ref location);
@@ -6147,7 +6214,10 @@ namespace MissionPlanner.GCSViews
 
                 try
                 {
-                    MainV2.comPort.setGuidedModeWP(gotohere);
+                    var port = MainV2.comPort;
+                    var sysid = port.MAV.sysid;
+                    var compid = port.MAV.compid;
+                    await VehicleRequest.RunAsync(() => port.setGuidedModeWP(sysid, compid, gotohere));
                 }
                 catch (Exception ex)
                 {
@@ -6172,7 +6242,10 @@ namespace MissionPlanner.GCSViews
 
                 try
                 {
-                    MainV2.comPort.setGuidedModeWP(gotohere);
+                    var port = MainV2.comPort;
+                    var sysid = port.MAV.sysid;
+                    var compid = port.MAV.compid;
+                    await VehicleRequest.RunAsync(() => port.setGuidedModeWP(sysid, compid, gotohere));
                 }
                 catch (Exception ex)
                 {
@@ -6688,7 +6761,7 @@ namespace MissionPlanner.GCSViews
             Settings.Instance["tabControlactions_Multiline"] = tabControlactions.Multiline.ToString();
         }
 
-        private void jumpToTagToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void jumpToTagToolStripMenuItem_Click(object sender, EventArgs e)
         {
             string tag_str = "";
             if (InputBox.Show("Jump to Tag", "Tag Id:", ref tag_str) != DialogResult.OK)
@@ -6707,7 +6780,10 @@ namespace MissionPlanner.GCSViews
             }
 
             try {
-                if (!MainV2.comPort.doCommand(MAVLink.MAV_CMD.DO_JUMP_TAG, tag, 0, 0, 0, 0, 0, 0))
+                var port = MainV2.comPort;
+                var sysid = port.MAV.sysid;
+                var compid = port.MAV.compid;
+                if (!await VehicleRequest.RunAsync(() => port.doCommand(sysid, compid, MAVLink.MAV_CMD.DO_JUMP_TAG, tag, 0, 0, 0, 0, 0, 0)))
                 {
                     CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
                 }
