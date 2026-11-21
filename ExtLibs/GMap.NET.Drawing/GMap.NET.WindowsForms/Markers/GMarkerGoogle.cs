@@ -254,6 +254,18 @@ namespace GMap.NET.WindowsForms.Markers
 #endif
       }
 
+      /// <summary>
+      /// a plain GMarkerGoogle draws only its bitmap/arrow at LocalPosition. Subclasses may draw
+      /// anything, so they are not culled unless they opt in themselves.
+      /// </summary>
+      public override bool CanCullOffscreen
+      {
+         get
+         {
+            return GetType() == typeof(GMarkerGoogle);
+         }
+      }
+
       public override void Dispose()
       {
          if(Bitmap != null)

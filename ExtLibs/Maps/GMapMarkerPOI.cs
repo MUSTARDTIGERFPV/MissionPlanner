@@ -16,5 +16,11 @@ namespace MissionPlanner.Maps
             : base(p, GMarkerGoogleType.red_dot)
         {
         }
+
+        // draws only the GMarkerGoogle bitmap
+        public override bool CanCullOffscreen
+        {
+            get { return GetType() == typeof(GMapMarkerPOI); }
+        }
     }
 }

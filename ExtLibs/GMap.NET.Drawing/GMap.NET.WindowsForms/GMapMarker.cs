@@ -240,6 +240,19 @@ namespace GMap.NET.WindowsForms
       public bool DisableRegionCheck = false;
 
       /// <summary>
+      /// true if everything OnRender draws stays within a small margin of LocalArea, so the
+      /// overlay may skip the marker while it is off screen. Opt-in: markers that draw beyond
+      /// their Size (heading lines, radius circles, plugin markers) must leave this false.
+      /// </summary>
+      public virtual bool CanCullOffscreen
+      {
+         get
+         {
+            return false;
+         }
+      }
+
+      /// <summary>
       /// can maker receive input
       /// </summary>
       public bool IsHitTestVisible = true;

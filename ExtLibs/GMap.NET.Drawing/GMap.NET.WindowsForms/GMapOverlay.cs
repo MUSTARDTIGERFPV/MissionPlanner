@@ -338,10 +338,11 @@ namespace GMap.NET.WindowsForms
 
                 if (Control.MarkersEnabled)
                 {
-                    // skip markers that are clearly off screen. Only the GMarkerGoogle family
-                    // (which includes the waypoint markers) is culled: it draws its bitmap
-                    // inside LocalArea, while other markers (vehicle heading lines, radius
-                    // circles, overlay images) draw far outside their Size. Not on a rotated map.
+                    // skip markers that are clearly off screen. Only markers that opt in through
+                    // CanCullOffscreen are culled (plain GMarkerGoogle, waypoint and POI markers):
+                    // they draw inside LocalArea, while others (vehicle heading lines, radius
+                    // circles, overlay images, plugin subclasses) may draw far outside their Size.
+                    // Not on a rotated map.
                     var cull = !Control.Core.IsRotated && Control.Bearing == 0;
                     // local coordinates are drawn translated by renderOffset
                     var view = new Rectangle((int) -Control.Core.renderOffset.X, (int) -Control.Core.renderOffset.Y,
@@ -354,7 +355,7 @@ namespace GMap.NET.WindowsForms
                         //if(m.IsVisible && (m.DisableRegionCheck || Control.Core.currentRegion.Contains(m.LocalPosition.X, m.LocalPosition.Y)))
                         if (m.IsVisible || m.DisableRegionCheck)
                         {
-                            if (cull && !m.DisableRegionCheck && m is GMap.NET.WindowsForms.Markers.GMarkerGoogle)
+                            if (cull && !m.DisableRegionCheck && m.CanCullOffscreen)
                             {
                                 var area = m.LocalArea;
                                 if (area.Right < view.Left || area.Left > view.Right ||

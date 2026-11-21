@@ -39,6 +39,12 @@ namespace MissionPlanner.Maps
             }
         }
 
+        // the number label reaches ~110 px right of LocalPosition, inside the overlay's cull margin
+        public override bool CanCullOffscreen
+        {
+            get { return GetType() == typeof(GMapMarkerWP); }
+        }
+
         public override void OnRender(IGraphics g)
         {
             if (selected)
