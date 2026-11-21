@@ -133,6 +133,9 @@ namespace MissionPlanner.Utilities
 
         void TryConnect()
         {
+            // the last connection this thread published in client
+            TcpClient own = null;
+
             run = true;
 
             while (run)
@@ -144,7 +147,7 @@ namespace MissionPlanner.Utilities
                     {
                         using (TcpClient cl = new TcpClient())
                         {
-                            client = cl;
+                            client = own = cl;
 
                             cl.Connect(server, serverport);
 
@@ -154,7 +157,12 @@ namespace MissionPlanner.Utilities
                         }
                     }
                 }
-                catch (Exception ex) { log.Error(ex); }
+                catch (Exception ex)
+                {
+                    // Stop closes the socket, which makes the read throw; that is not an error
+                    if (run)
+                        log.Error(ex);
+                }
 
                 // HTTP API
                 try
@@ -254,7 +262,7 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
-                        client = cl;
+                        client = own = cl;
 
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 30003, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
@@ -276,7 +284,7 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
-                        client = cl;
+                        client = own = cl;
 
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 30002, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
@@ -299,7 +307,7 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
-                        client = cl;
+                        client = own = cl;
 
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 31004, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
@@ -321,7 +329,7 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
-                        client = cl;
+                        client = own = cl;
 
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 31001, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
@@ -344,7 +352,7 @@ namespace MissionPlanner.Utilities
                 {
                     using (TcpClient cl = new TcpClient())
                     {
-                        client = cl;
+                        client = own = cl;
 
                         var result = cl.BeginConnect(System.Net.IPAddress.Loopback, 47806, null, null);
                         result.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT_MILLISECONDS);
@@ -367,7 +375,10 @@ namespace MissionPlanner.Utilities
                 stopEvent.WaitOne(2500);
             }
 
-            client = null;
+            // after a quick Stop/Start a new reader may already have published its own connection; leave that
+#pragma warning disable CS0420 // Interlocked gives the access its own barrier
+            Interlocked.CompareExchange(ref client, null, own);
+#pragma warning restore CS0420
 
             log.Info("adsb thread exit");
         }
