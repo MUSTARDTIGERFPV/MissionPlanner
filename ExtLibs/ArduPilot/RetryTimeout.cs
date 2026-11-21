@@ -22,17 +22,37 @@ namespace MissionPlanner.ArduPilot
         }
         private volatile bool _complete = false;
         /// <summary>
-        /// Set when Complete is set, so DoWork wakes without polling
+        /// Set when Complete, Retries or RetriesCurrent is set, so DoWork wakes without polling
         /// </summary>
         private readonly ManualResetEventSlim _signal = new ManualResetEventSlim(false);
         /// <summary>
         /// Number of total retrys
         /// </summary>
-        public int Retries = 3;
+        public int Retries
+        {
+            get { return _retries; }
+            set
+            {
+                _retries = value;
+                // a callback setting this to 0 gives up, let DoWork see it now
+                _signal.Set();
+            }
+        }
+        private volatile int _retries = 3;
         /// <summary>
         /// Current retry count
         /// </summary>
-        public int RetriesCurrent = 0;
+        public int RetriesCurrent
+        {
+            get { return _retriesCurrent; }
+            set
+            {
+                _retriesCurrent = value;
+                // a callback setting this past Retries cancels, let DoWork see it now
+                _signal.Set();
+            }
+        }
+        private volatile int _retriesCurrent = 0;
         /// <summary>
         /// timeout between retrys
         /// </summary>
@@ -83,6 +103,9 @@ namespace MissionPlanner.ArduPilot
                     _signal.Reset();
                     if (Complete)
                         return true;
+                    // callbacks give up by setting Retries = 0 or RetriesCurrent = 999
+                    if (RetriesCurrent >= Retries)
+                        break;
                     // re-read each time, ResetTimeout() can move it out
                     var remaining = TimeOutDateTime - DateTime.Now;
                     if (remaining <= TimeSpan.Zero)

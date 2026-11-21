@@ -79,6 +79,33 @@ namespace MissionPlannerTests.ArduPilot
         }
 
         [TestMethod]
+        public void GivingUpFromACallbackEndsTheWaitPromptly()
+        {
+            // MAVFtp NAK handlers set Retries = 0, cancel sets RetriesCurrent = 999
+            foreach (var giveUp in new System.Action<RetryTimeout>[] { t => t.Retries = 0, t => t.RetriesCurrent = 999 })
+            {
+                var timeout = new RetryTimeout(5, 5000);
+                int calls = 0;
+                timeout.WorkToDo = () =>
+                {
+                    calls++;
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(20);
+                        giveUp(timeout);
+                    });
+                };
+
+                var sw = Stopwatch.StartNew();
+                Assert.IsFalse(timeout.DoWork());
+                sw.Stop();
+
+                Assert.AreEqual(1, calls);
+                Assert.IsTrue(sw.ElapsedMilliseconds < 1000, "took " + sw.ElapsedMilliseconds + " ms");
+            }
+        }
+
+        [TestMethod]
         public void CompleteFromAPreviousRunDoesNotLeakIntoTheNext()
         {
             var timeout = new RetryTimeout(1, 50);
