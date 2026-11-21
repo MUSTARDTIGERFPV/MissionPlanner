@@ -36,6 +36,8 @@ namespace MissionPlanner.Plugin
 
         public static Dictionary<string, string> ErrorInfo = new Dictionary<string, string>();
 
+        static int assemblyResolveRegistered;
+
         static Assembly LoadFromSameFolder(object sender, ResolveEventArgs args)
         {
             if (args.RequestingAssembly == null)
@@ -120,8 +122,10 @@ namespace MissionPlanner.Plugin
                                                  Path.DirectorySeparatorChar + Path.GetFileName(file)))
                 return;
 
-            AppDomain currentDomain = AppDomain.CurrentDomain;
-            currentDomain.AssemblyResolve += new ResolveEventHandler(LoadFromSameFolder);
+            // one handler serves every plugin; adding it per plugin made each failed assembly lookup
+            // run it once per loaded plugin
+            if (Interlocked.Exchange(ref assemblyResolveRegistered, 1) == 0)
+                AppDomain.CurrentDomain.AssemblyResolve += new ResolveEventHandler(LoadFromSameFolder);
 
             Assembly asm = null;
 
