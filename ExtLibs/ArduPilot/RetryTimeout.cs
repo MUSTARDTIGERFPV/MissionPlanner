@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Reflection;
 using System.Threading;
-using System.Threading.Tasks;
 using log4net;
 
 namespace MissionPlanner.ArduPilot
@@ -11,7 +10,21 @@ namespace MissionPlanner.ArduPilot
         /// <summary>
         /// Has the task completed
         /// </summary>
-        public bool Complete = false;
+        public bool Complete
+        {
+            get { return _complete; }
+            set
+            {
+                _complete = value;
+                if (value)
+                    _signal.Set();
+            }
+        }
+        private volatile bool _complete = false;
+        /// <summary>
+        /// Set when Complete is set, so DoWork wakes without polling
+        /// </summary>
+        private readonly ManualResetEventSlim _signal = new ManualResetEventSlim(false);
         /// <summary>
         /// Number of total retrys
         /// </summary>
@@ -57,26 +70,28 @@ namespace MissionPlanner.ArduPilot
         {
             if (WorkToDo == null)
                 throw new ArgumentNullException("WorkToDo");
-            return Task.Run<bool>(() =>
+            Complete = false;
+            for (RetriesCurrent = 0; RetriesCurrent < Retries; RetriesCurrent++)
             {
-                Complete = false;
-                for (RetriesCurrent = 0; RetriesCurrent < Retries; RetriesCurrent++)
+                log.InfoFormat("Retry {0} {1} - {2}", _memberName, RetriesCurrent,
+                    TimeOutDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fff"));
+                WorkToDo();
+                TimeOutDateTime = DateTime.Now.AddMilliseconds(TimeoutMS);
+                while (true)
                 {
-                    log.InfoFormat($"Retry {_memberName} {0} - {1}", RetriesCurrent,
-                        TimeOutDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fff"));
-                    WorkToDo();
-                    TimeOutDateTime = DateTime.Now.AddMilliseconds(TimeoutMS);
-                    while (DateTime.Now < TimeOutDateTime)
-                    {
-                        if (Complete)
-                            return true;
-                        Thread.Sleep(100);
-                        log.Debug("TimeOutDateTime " + TimeOutDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fff"));
-                    }
+                    // reset before checking, so a Set() after the check still ends the Wait()
+                    _signal.Reset();
+                    if (Complete)
+                        return true;
+                    // re-read each time, ResetTimeout() can move it out
+                    var remaining = TimeOutDateTime - DateTime.Now;
+                    if (remaining <= TimeSpan.Zero)
+                        break;
+                    _signal.Wait(remaining);
                 }
+            }
 
-                return false;
-            }).GetAwaiter().GetResult();
+            return false;
         }
 
         public void ResetTimeout()
