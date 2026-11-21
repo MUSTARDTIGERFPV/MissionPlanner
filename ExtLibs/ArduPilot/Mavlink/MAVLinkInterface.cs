@@ -1979,7 +1979,8 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
         /// <returns></returns>
         public async Task<MAVLinkParamList> getParamListAsync(uint sysid, byte compid)
         {
-            List<int> indexsreceived = new List<int>();
+            // only Add/Contains/Count are used, a List made the one-by-one scan O(n^2)
+            HashSet<int> indexsreceived = new HashSet<int>();
 
             // create new list so if canceled we use the old list
             MAVLinkParamList newparamlist = new MAVLinkParamList();
