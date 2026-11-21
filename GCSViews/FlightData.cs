@@ -5609,9 +5609,14 @@ namespace MissionPlanner.GCSViews
 
                     if (tabControlactions.SelectedTab == tabStatus)
                     {
-                        MainV2.comPort.MAV.cs.UpdateCurrentSettings(
-                            bindingSourceStatusTab.UpdateDataSource(MainV2.comPort.MAV.cs));
-                        this.tabStatus.Invalidate();
+                        // the status tab lists every CurrentState value, 4hz is plenty
+                        if (statusTabLastUpdate.AddMilliseconds(250) <= DateTime.UtcNow)
+                        {
+                            statusTabLastUpdate = DateTime.UtcNow;
+                            MainV2.comPort.MAV.cs.UpdateCurrentSettings(
+                                bindingSourceStatusTab.UpdateDataSource(MainV2.comPort.MAV.cs));
+                            statusTabInvalidateChanged();
+                        }
                     }
                     else if (tabControlactions.SelectedTab == tabQuick)
                     {
@@ -6182,56 +6187,140 @@ namespace MissionPlanner.GCSViews
         }
 
         /// <summary>
-        /// the CurrentState properties in the order the status tab lists them, the tab is redrawn at 10hz
+        /// the CurrentState properties in the order the status tab lists them
         /// </summary>
         private static PropertyInfo[] statusTabProperties;
 
-        private void tabStatus_Paint(object sender, PaintEventArgs e)
+        /// <summary>
+        /// where each status tab item is drawn (unscrolled), for the tab height it was laid out for
+        /// </summary>
+        private Point[] statusTabLayout;
+        private int statusTabLayoutHeight = -1;
+        private int statusTabLayoutEndX;
+
+        /// <summary>
+        /// the value text last read for each status tab item
+        /// </summary>
+        private string[] statusTabValues;
+        private bool statusTabDoubleBuffered;
+        private DateTime statusTabLastUpdate;
+
+        private void statusTabUpdateLayout()
         {
             if (statusTabProperties == null)
                 statusTabProperties = MainV2.comPort.MAV.cs.GetItemList(true)
                     .Select(name => typeof(CurrentState).GetProperty(name)).ToArray();
 
-            using (var bmp = new Bitmap(tabStatus.DisplayRectangle.Width, tabStatus.DisplayRectangle.Height))
-            using (var g = Graphics.FromImage(bmp))
+            if (statusTabValues == null)
+                statusTabValues = new string[statusTabProperties.Length];
+
+            if (statusTabLayout != null && statusTabLayoutHeight == tabStatus.Height)
+                return;
+
+            var layout = new Point[statusTabProperties.Length];
+            int x = 10;
+            int y = 10;
+
+            for (int i = 0; i < layout.Length; i++)
+            {
+                layout[i] = new Point(x, y);
+
+                y += 15;
+
+                if (y > tabStatus.Height - 30)
+                {
+                    x += 190;
+                    y = 10;
+                }
+            }
+
+            statusTabLayout = layout;
+            statusTabLayoutHeight = tabStatus.Height;
+            statusTabLayoutEndX = x;
+        }
+
+        /// <summary>
+        /// the name and value area of a status tab item, in tab client coordinates
+        /// </summary>
+        private Rectangle statusTabItemRect(int index)
+        {
+            var p = statusTabLayout[index];
+            return new Rectangle(p.X + tabStatus.AutoScrollPosition.X, p.Y + tabStatus.AutoScrollPosition.Y, 170, 15);
+        }
+
+        /// <summary>
+        /// reads the values on screen and repaints only the ones whose text changed
+        /// </summary>
+        private void statusTabInvalidateChanged()
+        {
+            if (statusTabLayout == null || statusTabLayoutHeight != tabStatus.Height)
+            {
+                tabStatus.Invalidate();
+                return;
+            }
+
+            var cs = bindingSourceStatusTab.Current as CurrentState;
+            if (cs == null)
+                return;
+
+            var client = tabStatus.ClientRectangle;
+
+            for (int i = 0; i < statusTabProperties.Length; i++)
+            {
+                var rect = statusTabItemRect(i);
+                if (!rect.IntersectsWith(client))
+                    continue;
+
+                var value = statusTabProperties[i].GetValue(cs)?.ToString();
+                if (value == statusTabValues[i])
+                    continue;
+
+                statusTabValues[i] = value;
+                tabStatus.Invalidate(new Rectangle(rect.X + 120, rect.Y, 50, 15));
+            }
+        }
+
+        private void tabStatus_Paint(object sender, PaintEventArgs e)
+        {
+            statusTabUpdateLayout();
+
+            if (!statusTabDoubleBuffered)
+            {
+                typeof(Panel).InvokeMember("DoubleBuffered", BindingFlags.SetProperty
+                                                             | BindingFlags.Instance | BindingFlags.NonPublic, null,
+                    tabStatus, new object[] { true });
+                statusTabDoubleBuffered = true;
+            }
+
+            if (tabStatus.AutoScrollMinSize.Width < statusTabLayoutEndX)
+                tabStatus.AutoScrollMinSize = new Size(statusTabLayoutEndX + 164, 0);
+
+            var cs = bindingSourceStatusTab.Current as CurrentState;
+
             using (var br = new SolidBrush(tabStatus.ForeColor))
             {
-                g.Clear(Color.Transparent);
-
-                int x = 10;
-                int y = 10;
-
-                var cs = bindingSourceStatusTab.Current as CurrentState;
-
-                foreach (var field in statusTabProperties)
-                {
-                    g.DrawString(field.Name, this.Font, br, new RectangleF(x, y, 120, 15));
-
-                    if (cs != null)
-                        g.DrawString(field.GetValue(cs)?.ToString(), this.Font,
-                            br, new RectangleF(x + 120, y, 50, 15));
-
-                    x += 0;
-                    y += 15;
-
-                    if (y > tabStatus.Height - 30)
-                    {
-                        x += 190;
-                        y = 10;
-                    }
-                }
-
-                if (tabStatus.AutoScrollMinSize.Width < x)
-                {
-                    typeof(Panel).InvokeMember("DoubleBuffered", BindingFlags.SetProperty
-                                                                 | BindingFlags.Instance | BindingFlags.NonPublic, null,
-                        tabStatus, new object[] { true });
-
-                    tabStatus.AutoScrollMinSize = new Size(x + 164, 0);
-                }
                 e.Graphics.TranslateTransform(tabStatus.AutoScrollPosition.X,
                     tabStatus.AutoScrollPosition.Y);
-                e.Graphics.DrawImageUnscaled(bmp, 0, 0);
+
+                // only the items in the area being repainted
+                for (int i = 0; i < statusTabProperties.Length; i++)
+                {
+                    if (!statusTabItemRect(i).IntersectsWith(e.ClipRectangle))
+                        continue;
+
+                    var field = statusTabProperties[i];
+                    var p = statusTabLayout[i];
+
+                    e.Graphics.DrawString(field.Name, this.Font, br, new RectangleF(p.X, p.Y, 120, 15));
+
+                    if (cs != null)
+                    {
+                        var value = field.GetValue(cs)?.ToString();
+                        statusTabValues[i] = value;
+                        e.Graphics.DrawString(value, this.Font,
+                            br, new RectangleF(p.X + 120, p.Y, 50, 15));
+                    }
+                }
             }
         }
 
